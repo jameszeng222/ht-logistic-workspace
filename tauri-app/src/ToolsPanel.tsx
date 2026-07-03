@@ -1,12 +1,16 @@
-// 工具区面板：拖拽上传文件 → 调 FastAPI → 下载结果。
-// 与 AI 助手区平级，由 App.tsx 顶部 tab 切换。
+// 工具区面板：用 Tauri 原生文件对话框选文件 → 调 FastAPI → 用原生对话框保存结果。
 //
-// 后端是 python-sidecar/main.py（FastAPI on 127.0.0.1:8000）。
-// Tauri setup 时拉起 sidecar，ready 状态通过 sidecar-status 事件 + sidecar_status 命令获取。
+// 用 Tauri dialog 而非 HTML <input>/<a download>：
+//   - HTML 拖拽在 Tauri webview 里 DataTransfer.files 经常为空
+//   - <a download> 对 blob URL 在 webview 里经常无反应
+//   - 原生对话框更可靠，且能拿到绝对路径，便于 AI 后续引用
+//
+// 后端：python-sidecar/main.py（FastAPI on 127.0.0.1:8000）
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 
 interface ToolDef {
   id: string;
@@ -24,9 +28,19 @@ interface SidecarStatus {
   error?: string;
 }
 
-const INPUT_ACCEPT: Record<ToolDef["input"], string> = {
-  excel: ".xlsx,.xls",
-  pdf: ".pdf",
+const INPUT_FILTERS: Record<ToolDef["input"], { name: string; extensions: string[] }[]> = {
+  excel: [{ name: "Excel", extensions: ["xlsx", "xls"] }],
+  pdf: [{ name: "PDF", extensions: ["pdf"] }],
+};
+
+const OUTPUT_FILTERS: Record<ToolDef["output"], { name: string; extensions: string[] }[]> = {
+  zip: [{ name: "ZIP", extensions: ["zip"] }],
+  excel: [{ name: "Excel", extensions: ["xlsx"] }],
+};
+
+const OUTPUT_DEFAULT_NAME: Record<ToolDef["output"], string> = {
+  zip: "result.zip",
+  excel: "result.xlsx",
 };
 
 export function ToolsPanel() {
@@ -36,13 +50,11 @@ export function ToolsPanel() {
   const [sidecarError, setSidecarError] = useState<string | null>(null);
 
   const [activeTool, setActiveTool] = useState<ToolDef | null>(null);
-  const [file, setFile] = useState<File | null>(null);
+  // filePath 用 Tauri dialog 拿到的绝对路径；fileBlob 是对应的 File 对象用于 multipart 上传
+  const [filePath, setFilePath] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
-  const [resultUrl, setResultUrl] = useState<string | null>(null);
-  const [resultName, setResultName] = useState<string>("");
+  const [savedPath, setSavedPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ============ 加载工具列表 + 监听 sidecar 状态 ============
   const refreshTools = useCallback(async () => {
@@ -84,30 +96,47 @@ export function ToolsPanel() {
 
   useEffect(() => { refreshTools(); }, [refreshTools]);
 
-  // ============ 文件选择 ============
-  const onSelectFile = (f: File | null) => {
-    setFile(f);
-    setResultUrl(null);
-    setResultName("");
+  // ============ 选文件（Tauri 原生对话框）============
+  const pickFile = useCallback(async () => {
+    if (!activeTool) return;
     setError(null);
-  };
-
-  const onDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) onSelectFile(f);
-  }, []);
+    setSavedPath(null);
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        filters: INPUT_FILTERS[activeTool.input],
+      });
+      if (typeof selected === "string" && selected) {
+        setFilePath(selected);
+      }
+    } catch (e) {
+      setError(`选文件失败：${e}`);
+    }
+  }, [activeTool]);
 
   // ============ 调用工具 ============
   const runTool = useCallback(async () => {
-    if (!activeTool || !file || !sidecarReady) return;
+    if (!activeTool || !filePath || !sidecarReady) return;
     setRunning(true);
     setError(null);
-    setResultUrl(null);
+    setSavedPath(null);
     try {
+      // 用 fetch 读本地文件为 Blob 再上传（Tauri webview 支持读取 file:// 协议）
+      // 若 fetch file:// 失败，降级提示用户
+      let fileBlob: Blob;
+      try {
+        const fileResp = await fetch(`file://${filePath}`);
+        if (!fileResp.ok) throw new Error(`读取本地文件失败 HTTP ${fileResp.status}`);
+        fileBlob = await fileResp.blob();
+      } catch (e) {
+        throw new Error(`无法读取文件 ${filePath}：${e}。请确认路径正确。`);
+      }
+
       const fd = new FormData();
-      fd.append("file", file);
+      // FormData.append 需要 File 而非 Blob，用 File 构造器包一层带文件名
+      const fileName = filePath.split(/[\\/]/).pop() || "upload";
+      fd.append("file", new File([fileBlob], fileName), fileName);
+
       const resp = await fetch(`${sidecarUrl}${activeTool.endpoint}`, {
         method: "POST",
         body: fd,
@@ -120,20 +149,30 @@ export function ToolsPanel() {
         } catch {}
         throw new Error(msg);
       }
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const cd = resp.headers.get("Content-Disposition") || "";
-      const m = cd.match(/filename="?([^"]+)"?/);
-      const name = m?.[1]
-        || (activeTool.output === "zip" ? `${activeTool.id}.zip` : `${activeTool.id}.xlsx`);
-      setResultUrl(url);
-      setResultName(name);
+      const resultBlob = await resp.blob();
+
+      // 弹保存对话框让用户选保存位置
+      const defaultName = `${activeTool.id}-${new Date().toISOString().slice(0, 10)}.${OUTPUT_DEFAULT_NAME[activeTool.output].split(".")[1]}`;
+      const savePath = await saveDialog({
+        defaultPath: defaultName,
+        filters: OUTPUT_FILTERS[activeTool.output],
+      });
+      if (!savePath) {
+        // 用户取消保存，把结果暂存到 blob URL 供后续重试
+        setError("已取消保存。请重新执行工具并选择保存位置。");
+        return;
+      }
+
+      // 用 Tauri 写文件：通过 invoke 调 Rust 命令 write_binary_file
+      const buf = new Uint8Array(await resultBlob.arrayBuffer());
+      await invoke("write_binary_file", { path: savePath, data: Array.from(buf) });
+      setSavedPath(savePath);
     } catch (e) {
       setError(`工具执行失败：${e}`);
     } finally {
       setRunning(false);
     }
-  }, [activeTool, file, sidecarUrl, sidecarReady]);
+  }, [activeTool, filePath, sidecarUrl, sidecarReady]);
 
   return (
     <div className="tools-panel">
@@ -159,7 +198,7 @@ export function ToolsPanel() {
             <button
               key={t.id}
               className={`tool-card ${activeTool?.id === t.id ? "active" : ""}`}
-              onClick={() => { setActiveTool(t); onSelectFile(null); }}
+              onClick={() => { setActiveTool(t); setFilePath(null); setSavedPath(null); setError(null); }}
             >
               <div className="tool-card-name">{t.name}</div>
               <div className="tool-card-desc">{t.description}</div>
@@ -178,55 +217,60 @@ export function ToolsPanel() {
               <div className="tool-detail-title">{activeTool.name}</div>
               <div className="tool-detail-desc">{activeTool.description}</div>
 
-              <div
-                className={`drop-zone ${dragOver ? "drag" : ""} ${file ? "has-file" : ""}`}
-                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={onDrop}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept={INPUT_ACCEPT[activeTool.input]}
-                  style={{ display: "none" }}
-                  onChange={(e) => onSelectFile(e.target.files?.[0] || null)}
-                />
-                {file ? (
-                  <div className="drop-file-info">
-                    <div className="drop-file-name">{file.name}</div>
-                    <div className="drop-file-size">{formatBytes(file.size)}</div>
+              {/* 选文件区（点击弹原生对话框）*/}
+              <div className="file-pick-zone" onClick={pickFile}>
+                {filePath ? (
+                  <div className="file-pick-info">
+                    <div className="file-pick-icon">📄</div>
+                    <div className="file-pick-name">{filePath.split(/[\\/]/).pop()}</div>
+                    <div className="file-pick-path">{filePath}</div>
+                    <div className="file-pick-hint">点击重新选择</div>
                   </div>
                 ) : (
-                  <div className="drop-hint">
-                    <div className="drop-icon">⬆</div>
-                    <div>拖拽文件到此处，或点击选择</div>
-                    <div className="drop-accept">支持：{INPUT_ACCEPT[activeTool.input]}</div>
+                  <div className="file-pick-empty">
+                    <div className="file-pick-icon">📁</div>
+                    <div>点击选择 {activeTool.input.toUpperCase()} 文件</div>
+                    <div className="file-pick-accept">
+                      支持：{INPUT_FILTERS[activeTool.input].map(f => f.extensions.join(", ")).join(", ")}
+                    </div>
                   </div>
                 )}
               </div>
 
+              {/* 执行按钮 */}
               <div className="tool-actions">
                 <button
                   className="btn-primary"
                   onClick={runTool}
-                  disabled={!file || running || !sidecarReady}
+                  disabled={!filePath || running || !sidecarReady}
                 >
                   {running ? "执行中…" : "执行工具"}
                 </button>
-                {file && (
-                  <button className="btn-secondary" onClick={() => onSelectFile(null)}>清除</button>
+                {filePath && (
+                  <button
+                    className="btn-secondary"
+                    onClick={() => { setFilePath(null); setSavedPath(null); setError(null); }}
+                  >清除</button>
                 )}
               </div>
 
-              {error && <div className="tool-error">{error}</div>}
+              {/* 错误（可展开看完整堆栈）*/}
+              {error && (
+                <div className="tool-error">
+                  <div className="tool-error-title">❌ 错误</div>
+                  <pre className="tool-error-detail">{error}</pre>
+                </div>
+              )}
 
-              {resultUrl && (
+              {/* 成功结果 */}
+              {savedPath && (
                 <div className="tool-result">
-                  <div className="tool-result-label">完成 — 下载结果：</div>
-                  <a className="tool-download" href={resultUrl} download={resultName}>
-                    ⬇ {resultName}
-                  </a>
+                  <div className="tool-result-label">✓ 完成 — 结果已保存：</div>
+                  <div className="tool-result-path">{savedPath}</div>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => invoke("open_in_explorer", { path: savedPath })}
+                  >在文件夹中显示</button>
                 </div>
               )}
             </>
@@ -237,10 +281,4 @@ export function ToolsPanel() {
       </div>
     </div>
   );
-}
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }

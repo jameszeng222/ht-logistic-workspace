@@ -740,9 +740,49 @@ async fn stop_sidecar(state: State<'_, SidecarState>) -> Result<(), String> {
     Ok(())
 }
 
+/// 写二进制文件（工具结果保存用）。前端 invoke("write_binary_file", { path, data })
+/// data 是 number[]（从 Uint8Array 转换），Rust 端转回 Vec<u8> 写盘。
+#[tauri::command]
+async fn write_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    std::fs::write(&path, &data).map_err(|e| format!("写入文件失败：{e}"))
+}
+
+/// 在文件管理器中显示文件（Windows: explorer /select; macOS: open -R; Linux: xdg-open）
+#[tauri::command]
+async fn open_in_explorer(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("文件不存在：{path}"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // explorer /select,<path> 会打开资源管理器并选中该文件
+        Command::new("explorer")
+            .args(["/select,", &path])
+            .spawn()
+            .map_err(|e| format!("打开资源管理器失败：{e}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .args(["-R", &path])
+            .spawn()
+            .map_err(|e| format!("打开 Finder 失败：{e}"))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        // Linux：打开文件所在目录
+        let dir = p.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_else(|| ".".into());
+        Command::new("xdg-open").arg(&dir).spawn()
+            .map_err(|e| format!("打开文件管理器失败：{e}"))?;
+    }
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .manage(PiState {
             stdin: Mutex::new(None),
             child: Mutex::new(None),
@@ -755,7 +795,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             start_pi, stop_pi, send_command, send_request, scan_sessions, delete_session, check_env_keys, read_text_file, write_text_file, read_session_history,
-            sidecar_url, sidecar_status, stop_sidecar
+            sidecar_url, sidecar_status, stop_sidecar,
+            write_binary_file, open_in_explorer
         ])
         .setup(|app| {
             // 启动 Python 工具 sidecar（不阻塞，后台轮询健康后 emit sidecar-status）
