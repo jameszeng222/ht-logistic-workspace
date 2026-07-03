@@ -227,7 +227,7 @@ body {
 }
 .header-tab:hover { color: var(--fg); }
 .header-tab.active {
-  background: var(--accent);
+  background: var(--primary);
   color: white;
   font-weight: 500;
 }
@@ -1254,8 +1254,10 @@ body {
 
 
 /* ============ 工具区（ToolsPanel） ============ */
+/* 工具区占满 .body 的整个 grid 区域（跨越 sidebar + main 两列），
+   否则 grid 默认把它放进第二列，左侧留出空白。 */
 .tools-panel {
-  flex: 1;
+  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1323,10 +1325,10 @@ body {
   transition: all 0.15s var(--ease);
   color: var(--fg);
 }
-.tool-card:hover { border-color: var(--accent); }
+.tool-card:hover { border-color: var(--primary); }
 .tool-card.active {
-  border-color: var(--accent);
-  background: rgba(90, 140, 240, 0.08);
+  border-color: var(--primary);
+  background: var(--primary-soft);
 }
 .tool-card-name { font-weight: 600; font-size: var(--text-sm); margin-bottom: 4px; }
 .tool-card-desc { font-size: var(--text-xs); color: var(--fg-muted); line-height: 1.4; margin-bottom: var(--space-2); }
@@ -1343,7 +1345,7 @@ body {
   transition: all 0.15s var(--ease);
   background: var(--surface);
 }
-.drop-zone.drag { border-color: var(--accent); background: rgba(90, 140, 240, 0.08); }
+.drop-zone.drag { border-color: var(--primary); background: var(--primary-soft); }
 .drop-zone.has-file { border-style: solid; border-color: var(--success); }
 .drop-icon { font-size: 28px; color: var(--fg-muted); margin-bottom: var(--space-2); }
 .drop-hint { color: var(--fg-muted); font-size: var(--text-sm); }
@@ -1372,7 +1374,7 @@ body {
 .tool-download {
   display: inline-block;
   padding: 6px 14px;
-  background: var(--accent);
+  background: var(--primary);
   color: white;
   border-radius: var(--radius-md);
   text-decoration: none;
