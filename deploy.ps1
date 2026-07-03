@@ -114,16 +114,18 @@ Write-Host "[4/8] Verifying deployed files ..." -ForegroundColor Yellow
 $homeDir = $env:USERPROFILE
 if (-not $homeDir) { $homeDir = $env:HOME }
 $fileChecks = @(
-    @{ name="Pi extension (all-in-one.ts)";   path="$homeDir\.pi\agent\extensions\all-in-one.ts" },
-    @{ name="better-sqlite3 module";          path="$homeDir\.pi\agent\extensions\node_modules\better-sqlite3" },
-    @{ name="pdf-parse module";               path="$homeDir\.pi\agent\extensions\node_modules\pdf-parse" },
-    @{ name="SYSTEM.md (permission config)";  path="$homeDir\.pi\agent\SYSTEM.md" },
-    @{ name="skills/ dir";                    path="$homeDir\.pi\agent\skills" }
+    @{ name="Pi extension (all-in-one.ts)";   path="$homeDir\.pi\agent\extensions\all-in-one.ts";       optional=$false },
+    @{ name="pdf-parse module";               path="$homeDir\.pi\agent\extensions\node_modules\pdf-parse"; optional=$false },
+    @{ name="better-sqlite3 module";          path="$homeDir\.pi\agent\extensions\node_modules\better-sqlite3"; optional=$true },
+    @{ name="SYSTEM.md (permission config)";  path="$homeDir\.pi\agent\SYSTEM.md";                      optional=$false },
+    @{ name="skills/ dir";                    path="$homeDir\.pi\agent\skills";                         optional=$false }
 )
 $fileAllOk = $true
 foreach ($c in $fileChecks) {
     if (Test-Path $c.path) {
         Write-Host "  [OK] $($c.name)" -ForegroundColor Green
+    } elseif ($c.optional) {
+        Write-Host "  [OPTIONAL-MISSING] $($c.name) (SQLite tools disabled, logistic tools OK)" -ForegroundColor Yellow
     } else {
         Write-Host "  [MISSING] $($c.name)" -ForegroundColor Red
         Write-Host "          -> $($c.path)" -ForegroundColor Gray

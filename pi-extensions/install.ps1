@@ -7,9 +7,11 @@
 #   1. Locate ~/.pi/agent/extensions/ (create if missing)
 #   2. Copy all-in-one.ts there (overwrite)
 #   3. Ensure package.json exists in target dir (npm init -y if missing)
-#   4. Install native deps (better-sqlite3, pdf-parse) IN the target dir
+#   4. Install deps IN the target dir
 #      (Pi loads extension from ~/.pi/agent/extensions/, so node_modules
 #       must live there, not in the source repo)
+#      - pdf-parse: pure JS, required
+#      - better-sqlite3: native, optional (non-fatal if build tools absent)
 #   5. Deploy pi-agent-config (SYSTEM.md + skills/) to ~/.pi/agent/
 #      (SYSTEM.md defines permission tiers; skills/ define per-domain workflows)
 #   6. Print verification steps
@@ -47,7 +49,7 @@ if (-not $homeDir) {
 $piAgentDir = Join-Path $homeDir ".pi\agent"
 $extDir = Join-Path $piAgentDir "extensions"
 
-Write-Host "[1/5] Target dir: $extDir" -ForegroundColor Yellow
+Write-Host "[1/6] Target dir: $extDir" -ForegroundColor Yellow
 if (-not (Test-Path $extDir)) {
     New-Item -ItemType Directory -Path $extDir -Force | Out-Null
     Write-Host "OK: created (was missing — extension was never installed before)" -ForegroundColor Green
@@ -56,12 +58,12 @@ if (-not (Test-Path $extDir)) {
 }
 
 # ============ 2. Copy all-in-one.ts ============
-Write-Host "[2/5] Copying all-in-one.ts ..." -ForegroundColor Yellow
+Write-Host "[2/6] Copying all-in-one.ts ..." -ForegroundColor Yellow
 Copy-Item -Path $srcFile -Destination (Join-Path $extDir "all-in-one.ts") -Force
 Write-Host "OK: copied (overwrote existing)" -ForegroundColor Green
 
 # ============ 3. Ensure package.json in target dir ============
-Write-Host "[3/5] Ensuring package.json in target dir ..." -ForegroundColor Yellow
+Write-Host "[3/6] Ensuring package.json in target dir ..." -ForegroundColor Yellow
 $pkgJson = Join-Path $extDir "package.json"
 if (-not (Test-Path $pkgJson)) {
     Push-Location $extDir
@@ -77,18 +79,34 @@ if (-not (Test-Path $pkgJson)) {
     Write-Host "OK: package.json already exists (kept)" -ForegroundColor Green
 }
 
-# ============ 4. Install native deps IN target dir ============
-Write-Host "[4/5] Installing native deps in target dir ..." -ForegroundColor Yellow
-Write-Host "  (better-sqlite3, pdf-parse — must live in ~/.pi/agent/extensions/node_modules)" -ForegroundColor Gray
+# ============ 4. Install deps IN target dir ============
+Write-Host "[4/6] Installing deps in target dir ..." -ForegroundColor Yellow
 Push-Location $extDir
 try {
-    npm install better-sqlite3@^11.3.0 pdf-parse@^1.1.1
+    # pdf-parse is pure JS — always install (required for parse_pdf tool).
+    Write-Host "  Installing pdf-parse (pure JS, required) ..." -ForegroundColor Gray
+    npm install pdf-parse@^1.1.1
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: npm install failed. Check network / node version." -ForegroundColor Red
+        Write-Host "ERROR: pdf-parse install failed (network?)." -ForegroundColor Red
         exit 1
     }
+    Write-Host "  OK: pdf-parse installed" -ForegroundColor Green
+
+    # better-sqlite3 is a native module. On Windows with Node 24 there is often no
+    # prebuilt binary, so npm falls back to node-gyp which needs Python + VS Build
+    # Tools (C++ compiler). That is a heavy install many users lack. Make it
+    # NON-FATAL: if it fails, the extension still loads — SQLite-dependent tools
+    # (task/note/query_database) are auto-disabled via feature detection in
+    # all-in-one.ts. Core logistic tools are unaffected.
+    Write-Host "  Installing better-sqlite3 (native, optional) ..." -ForegroundColor Gray
+    npm install better-sqlite3@^11.3.0 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  WARN: better-sqlite3 install failed (needs Python + VS Build Tools to" -ForegroundColor Yellow
+        Write-Host "        compile). Skipping — SQLite tools will be disabled, logistic tools OK." -ForegroundColor Yellow
+    } else {
+        Write-Host "  OK: better-sqlite3 installed" -ForegroundColor Green
+    }
 } finally { Pop-Location }
-Write-Host "OK: deps installed" -ForegroundColor Green
 
 # ============ 5. Deploy agent config (SYSTEM.md + skills/) ============
 Write-Host "[5/6] Deploying agent config (SYSTEM.md + skills/) ..." -ForegroundColor Yellow
@@ -123,13 +141,20 @@ $nodeModules = Join-Path $extDir "node_modules"
 $bsql = Join-Path $nodeModules "better-sqlite3"
 $pdfp = Join-Path $nodeModules "pdf-parse"
 $allOk = $true
-foreach ($p in @($installedTs, $bsql, $pdfp)) {
+# Required: all-in-one.ts + pdf-parse
+foreach ($p in @($installedTs, $pdfp)) {
     if (Test-Path $p) {
         Write-Host "  [OK] $p" -ForegroundColor Green
     } else {
-        Write-Host "  [MISSING] $p" -ForegroundColor Red
+        Write-Host "  [MISSING] $p (required)" -ForegroundColor Red
         $allOk = $false
     }
+}
+# Optional: better-sqlite3 (SQLite tools disabled if missing; logistic tools unaffected)
+if (Test-Path $bsql) {
+    Write-Host "  [OK] $bsql" -ForegroundColor Green
+} else {
+    Write-Host "  [OPTIONAL-MISSING] $bsql (SQLite tools will be disabled, logistic tools OK)" -ForegroundColor Yellow
 }
 
 Write-Host ""

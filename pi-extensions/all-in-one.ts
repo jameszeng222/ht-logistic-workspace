@@ -119,6 +119,14 @@ async function callSidecarJsonTool(
 }
 
 export default function (pi: ExtensionAPI) {
+  // Feature detection: optional deps. If missing, skip registering dependent
+  // tools so the extension still loads (core logistic tools unaffected).
+  // better-sqlite3 is a native module needing Python + VS Build Tools to compile
+  // on Windows when no prebuilt binary exists (e.g. Node 24); if the user lacks
+  // build tools, degrade gracefully instead of failing the whole extension.
+  const HAVE_BSQL = (() => { try { require("better-sqlite3"); return true; } catch { return false; } })();
+  const HAVE_PDFPARSE = (() => { try { require("pdf-parse"); return true; } catch { return false; } })();
+
   // 启动时禁用危险默认工具（bash/edit/write 等），保留 read + 所有扩展注册的工具。
   // 注意：pi.setActiveTools 对内置工具与动态注册工具都生效（见 pi.dev extensions 文档），
   //       因此不能写成 setActiveTools(["read"])——那会把本扩展注册的 16 个工具也禁用掉。
@@ -135,10 +143,17 @@ export default function (pi: ExtensionAPI) {
       keep = ["read"];
     }
     pi.setActiveTools(keep);
-    ctx.ui.notify("全场景助理已加载（5 域工具就绪，含 HT 物流）", "info");
+    const domains = ["HT 物流", "自动化"];
+    if (HAVE_BSQL) domains.push("数据分析/任务笔记");
+    if (HAVE_PDFPARSE) domains.push("文档处理");
+    ctx.ui.notify(`全场景助理已加载（${domains.join("、")}）`, "info");
+    if (!HAVE_BSQL) {
+      ctx.ui.notify("better-sqlite3 未安装，已跳过 SQLite 工具（任务/笔记/数据库查询）", "warn");
+    }
   });
 
   // ==================== 数据分析域 ====================
+  if (HAVE_BSQL) {
   pi.registerTool({
     name: "query_database",
     description: "查询本地 SQLite 数据库（只读）。当用户要分析数据、查表、出报表时使用。",
@@ -168,6 +183,7 @@ export default function (pi: ExtensionAPI) {
       }
     },
   });
+  } // HAVE_BSQL (query_database)
 
   pi.registerTool({
     name: "chart_render",
@@ -195,6 +211,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ==================== 文档处理域 ====================
+  if (HAVE_PDFPARSE) {
   pi.registerTool({
     name: "parse_pdf",
     description: "解析 PDF 提取文本。当用户上传 PDF 要总结/问答时使用。",
@@ -215,6 +232,7 @@ export default function (pi: ExtensionAPI) {
       };
     },
   });
+  } // HAVE_PDFPARSE (parse_pdf)
 
   pi.registerTool({
     // 注意：本工具实现为子串匹配（lowercased indexOf），并非真正的向量语义检索。
@@ -337,6 +355,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ==================== 任务/笔记管理域 ====================
+  if (HAVE_BSQL) {
   function openDb() {
     const Database = require("better-sqlite3");
     const fs = require("node:fs");
@@ -475,6 +494,7 @@ export default function (pi: ExtensionAPI) {
       }
     },
   });
+  } // HAVE_BSQL (task/note tools)
 
   // ==================== HT 物流工具域 ====================
   // 这三个工具通过 HTTP 调用 Python sidecar（FastAPI on 127.0.0.1:8000），

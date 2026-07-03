@@ -19,17 +19,65 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 $MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
 $MIRROR_HOST = "pypi.tuna.tsinghua.edu.cn"
 
+# ============ Find a working Python 3.10+ ============
+# Windows often ships a Store "App Execution Alias" stub as `python` that does
+# nothing in non-interactive shells (returns empty version). Skip it and prefer
+# the `py` launcher, then scan known install locations. Returns python.exe path
+# or $null.
+function Find-Python {
+    $candidates = @()
+    $py = Get-Command py -ErrorAction SilentlyContinue
+    if ($py) {
+        try {
+            $exe = & py -3 -c "import sys; print(sys.executable)" 2>$null
+            if ($exe -and (Test-Path $exe.Trim())) { $candidates += $exe.Trim() }
+        } catch {}
+    }
+    foreach ($cmd in @("python","python3")) {
+        $g = Get-Command $cmd -ErrorAction SilentlyContinue
+        if ($g -and $g.Source -and ($g.Source -notmatch "WindowsApps")) { $candidates += $g.Source }
+    }
+    $knownRoots = @()
+    if ($env:LOCALAPPDATA) { $knownRoots += Join-Path $env:LOCALAPPDATA "Programs\Python" }
+    $knownRoots += "C:\Python*", "$env:ProgramFiles\Python*", "${env:ProgramFiles(x86)}\Python*"
+    foreach ($root in $knownRoots) {
+        Get-ChildItem -Path $root -Filter "python.exe" -Recurse -ErrorAction SilentlyContinue -Depth 1 |
+            ForEach-Object { $candidates += $_.FullName }
+    }
+    foreach ($c in $candidates) {
+        try {
+            $ver = & $c --version 2>&1
+            if ($ver -match "Python 3\.(\d+)") {
+                if ([int]$Matches[1] -ge 10) { return $c }
+            }
+        } catch {}
+    }
+    return $null
+}
+
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  HT Logistic Workspace - Sidecar Setup" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
+$pythonExe = Find-Python
+if (-not $pythonExe) {
+    Write-Host "ERROR: No working Python 3.10+ found." -ForegroundColor Red
+    Write-Host "The Python sidecar requires Python. The Windows Store 'python' stub does NOT count." -ForegroundColor White
+    Write-Host "Install real Python:" -ForegroundColor White
+    Write-Host "  1. Download from https://www.python.org/downloads/" -ForegroundColor White
+    Write-Host "  2. Run the installer and CHECK 'Add python.exe to PATH'" -ForegroundColor White
+    Write-Host "  3. Reopen PowerShell and re-run this script" -ForegroundColor White
+    exit 1
+}
+Write-Host "Using Python: $pythonExe" -ForegroundColor Green
+
 # ============ 1. Create venv ============
 if (-not (Test-Path ".\.venv\Scripts\Activate.ps1")) {
     Write-Host "[1/5] Creating virtual environment .venv ..." -ForegroundColor Yellow
-    python -m venv .venv
+    & $pythonExe -m venv .venv
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Failed to create venv. Please confirm Python 3.10+ is installed." -ForegroundColor Red
+        Write-Host "Failed to create venv with $pythonExe" -ForegroundColor Red
         exit 1
     }
     Write-Host "OK: venv created" -ForegroundColor Green
