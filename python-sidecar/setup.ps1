@@ -11,6 +11,14 @@
 #   5. Print how to start the service
 #
 # If Tsinghua mirror is slow, switch to Aliyun by editing $MIRROR below.
+#
+# Usage:
+#   .\setup.ps1                              # auto-detect Python (prefer 3.11/3.12)
+#   .\setup.ps1 -PythonExe "C:\Path\python.exe"  # force a specific Python
+
+param(
+    [string]$PythonExe = ""
+)
 
 $ErrorActionPreference = "Stop"
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -81,21 +89,26 @@ Write-Host "  HT Logistic Workspace - Sidecar Setup" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-$pythonExe = Find-Python
-if (-not $pythonExe) {
-    Write-Host "ERROR: No working Python 3.10+ found." -ForegroundColor Red
-    Write-Host "The Python sidecar requires Python. The Windows Store 'python' stub does NOT count." -ForegroundColor White
-    Write-Host ""
-    Write-Host "Option A — Auto-install (recommended, no admin needed):" -ForegroundColor White
-    Write-Host "  Go to repo root and run:" -ForegroundColor White
-    Write-Host "    .\scripts\install-python.ps1" -ForegroundColor White
-    Write-Host "  It downloads Python 3.12 and installs silently, then re-run this script." -ForegroundColor White
-    Write-Host ""
-    Write-Host "Option B — Manual install:" -ForegroundColor White
-    Write-Host "  1. Download from https://www.python.org/downloads/" -ForegroundColor White
-    Write-Host "  2. Run the installer and CHECK 'Add python.exe to PATH'" -ForegroundColor White
-    Write-Host "  3. Reopen PowerShell and re-run this script" -ForegroundColor White
-    exit 1
+if ($PythonExe -and (Test-Path $PythonExe)) {
+    $pythonExe = $PythonExe
+    Write-Host "Using Python (from -PythonExe): $pythonExe" -ForegroundColor Green
+} else {
+    $pythonExe = Find-Python
+    if (-not $pythonExe) {
+        Write-Host "ERROR: No working Python 3.10+ found." -ForegroundColor Red
+        Write-Host "The Python sidecar requires Python. The Windows Store 'python' stub does NOT count." -ForegroundColor White
+        Write-Host ""
+        Write-Host "Option A — Auto-install (recommended, no admin needed):" -ForegroundColor White
+        Write-Host "  Go to repo root and run:" -ForegroundColor White
+        Write-Host "    .\scripts\install-python.ps1" -ForegroundColor White
+        Write-Host "  It downloads Python 3.12 and installs silently, then re-run this script." -ForegroundColor White
+        Write-Host ""
+        Write-Host "Option B — Manual install:" -ForegroundColor White
+        Write-Host "  1. Download from https://www.python.org/downloads/" -ForegroundColor White
+        Write-Host "  2. Run the installer and CHECK 'Add python.exe to PATH'" -ForegroundColor White
+        Write-Host "  3. Reopen PowerShell and re-run this script" -ForegroundColor White
+        exit 1
+    }
 }
 Write-Host "Using Python: $pythonExe" -ForegroundColor Green
 
