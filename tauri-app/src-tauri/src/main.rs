@@ -591,16 +591,40 @@ fn resolve_sidecar(resource_dir: Option<&std::path::Path>) -> Result<(Command, s
         }
     }
 
-    // 2. 开发模式：相对可执行文件/工作目录的 ../python-sidecar 或 ../../python-sidecar
-    //    Tauri dev 跑在 tauri-app/src-tauri/，python-sidecar 在仓库根。
-    let candidates: Vec<std::path::PathBuf> = if let Some(rd) = resource_dir {
-        // resource_dir 在 dev 模式等于 src-tauri，向上找
-        vec![rd.join("..").join("..").join("python-sidecar").canonicalize().unwrap_or_default(),
-             rd.join("..").join("python-sidecar").canonicalize().unwrap_or_default()]
-    } else {
-        vec![std::path::PathBuf::from("../python-sidecar").canonicalize().unwrap_or_default(),
-             std::path::PathBuf::from("python-sidecar").canonicalize().unwrap_or_default()]
-    };
+    // 2. 开发模式：基于当前可执行文件位置向上查找 python-sidecar/ 目录
+    //    dev 模式下可执行文件在 src-tauri/target/debug/pi-assistant.exe，
+    //    python-sidecar/ 在仓库根（即 target 的上 3 级：debug→target→src-tauri→repo-root）。
+    //    候选路径：current_exe 向上 1~5 级 + resource_dir 向上 1~3 级 + 当前工作目录。
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let mut cur: Option<&std::path::Path> = Some(exe_dir);
+            for _ in 0..6 {
+                if let Some(d) = cur {
+                    candidates.push(d.join("python-sidecar"));
+                    cur = d.parent();
+                } else { break; }
+            }
+        }
+    }
+    if let Some(rd) = resource_dir {
+        let mut cur: Option<&std::path::Path> = Some(rd);
+        for _ in 0..4 {
+            if let Some(d) = cur {
+                candidates.push(d.join("python-sidecar"));
+                cur = d.parent();
+            } else { break; }
+        }
+    }
+    // 兜底：当前工作目录
+    candidates.push(std::path::PathBuf::from("python-sidecar"));
+    candidates.push(std::path::PathBuf::from("../python-sidecar"));
+
+    eprintln!("[sidecar] 候选路径:");
+    for c in &candidates {
+        eprintln!("  -> {} (exists={}, has main.py={})",
+            c.display(), c.is_dir(), c.join("main.py").is_file());
+    }
     for ps_dir in candidates {
         if !ps_dir.is_dir() { continue; }
         if ps_dir.join("main.py").is_file() {
@@ -609,6 +633,7 @@ fn resolve_sidecar(resource_dir: Option<&std::path::Path>) -> Result<(Command, s
             let mut cmd = Command::new(py);
             cmd.arg("main.py");
             cmd.current_dir(&ps_dir);
+            eprintln!("[sidecar] 选中: {} (python {})", ps_dir.display(), py);
             return Ok((cmd, ps_dir));
         }
     }
@@ -621,6 +646,18 @@ fn spawn_sidecar(app: &AppHandle) {
     let state = app.state::<SidecarState>();
     if state.child.lock().unwrap().is_some() {
         return; // 已启动
+    }
+
+    // 端口已占用检测：如果 127.0.0.1:8000 已经能连上，说明用户手动起了 sidecar
+    // （或上次未清理），直接标记为就绪，不再拉起新进程，避免端口冲突。
+    let addr = format!("127.0.0.1:{SIDECAR_PORT}");
+    if std::net::TcpStream::connect(&addr).is_ok() {
+        eprintln!("[sidecar] 端口 {} 已被占用，认定外部 sidecar 已就绪", SIDECAR_PORT);
+        state.ready.store(true, Ordering::SeqCst);
+        let _ = app.emit("sidecar-status", serde_json::json!({
+            "ready": true, "url": SIDECAR_URL, "note": "外部 sidecar"
+        }));
+        return;
     }
 
     let resource_dir = app.path().resource_dir().ok();
