@@ -1128,6 +1128,100 @@ async fn open_in_explorer(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 目录条目信息
+#[derive(serde::Serialize)]
+struct DirEntryInfo {
+    name: String,
+    path: String,
+    is_dir: bool,
+    size: u64,
+    modified: f64,
+}
+
+/// 列出目录内容（用于文件浏览器）
+/// 排序：目录在前，然后按名称排序
+#[tauri::command]
+async fn list_dir(path: String) -> Result<Vec<DirEntryInfo>, String> {
+    let dir = std::path::Path::new(&path);
+    if !dir.exists() {
+        return Err(format!("目录不存在：{path}"));
+    }
+    if !dir.is_dir() {
+        return Err(format!("不是目录：{path}"));
+    }
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("读取目录失败：{e}"))?;
+    let mut result: Vec<DirEntryInfo> = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("读取条目失败：{e}"))?;
+        let meta = entry.metadata().map_err(|e| format!("读取元数据失败：{e}"))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        // 跳过隐藏文件（以 . 开头）
+        if name.starts_with('.') {
+            continue;
+        }
+        let modified = meta.modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        result.push(DirEntryInfo {
+            name,
+            path: entry.path().to_string_lossy().to_string(),
+            is_dir: meta.is_dir(),
+            size: if meta.is_dir() { 0 } else { meta.len() },
+            modified,
+        });
+    }
+    // 排序：目录优先，然后按名称（不区分大小写）
+    result.sort_by(|a, b| {
+        match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        }
+    });
+    Ok(result)
+}
+
+/// 用系统默认程序打开文件
+#[tauri::command]
+async fn open_file(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("文件不存在：{path}"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd").args(["/C", "start", "", &path]).spawn()
+            .map_err(|e| format!("打开文件失败：{e}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(&path).spawn()
+            .map_err(|e| format!("打开文件失败：{e}"))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(&path).spawn()
+            .map_err(|e| format!("打开文件失败：{e}"))?;
+    }
+    Ok(())
+}
+
+/// 获取 agent 相关目录路径（用于文件浏览器初始定位）
+#[tauri::command]
+async fn get_agent_paths() -> Result<serde_json::Value, String> {
+    let agent = get_agent_dir().ok_or("找不到 agent 目录")?;
+    let home = dirs::home_dir().ok_or("找不到主目录")?;
+    Ok(serde_json::json!({
+        "home": home.to_string_lossy().to_string(),
+        "agent": agent.to_string_lossy().to_string(),
+        "sessions": agent.join("sessions").to_string_lossy().to_string(),
+        "extensions": agent.join("extensions").to_string_lossy().to_string(),
+        "skills": agent.join("skills").to_string_lossy().to_string(),
+    }))
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
@@ -1148,7 +1242,8 @@ fn main() {
             sidecar_url, sidecar_status, stop_sidecar,
             write_binary_file, open_in_explorer,
             list_extensions, install_extension, uninstall_extension,
-            get_model_config, save_model_config, apply_model_config
+            get_model_config, save_model_config, apply_model_config,
+            list_dir, open_file, get_agent_paths
         ])
         .setup(|app| {
             // 启动前先应用模型配置（把 API Key 注入环境变量）

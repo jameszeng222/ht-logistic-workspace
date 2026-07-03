@@ -17,6 +17,7 @@ import { rebuildTurnsFromMessages } from "./utils";
 import { ChartView, extractChartConfig } from "./Chart";
 import { ToolsPanel } from "./ToolsPanel";
 import { BranchNavigator } from "./BranchNavigator";
+import { FileBrowser } from "./FileBrowser";
 import type { ToolCall, AssistantMsg, Turn } from "./types";
 import "./styles.css";
 
@@ -69,7 +70,7 @@ export default function App() {
 
   // 顶部主 tab：「助手」= Pi 聊天，「工具」= 工具区（拖拽文件 → 调 FastAPI → 下载结果）
   // 两个区域职责分离：助手靠 Pi 子进程；工具靠 Python sidecar。互不打断。
-  const [activeView, setActiveView] = useState<"chat" | "tools">("chat");
+  const [activeView, setActiveView] = useState<"chat" | "tools" | "files">("chat");
 
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
@@ -800,6 +801,13 @@ export default function App() {
       })
     : sessions;
 
+  // 当前会话的 cwd（用于文件浏览器初始定位）
+  const currentSessionCwd = useMemo(() => {
+    if (!currentSessionPath) return undefined;
+    const match = sessions.find((s) => s.path === currentSessionPath);
+    return match?.cwd;
+  }, [currentSessionPath, sessions]);
+
   // 按工作目录分组（学 pi-web 的会话浏览器）
   // 有 cwd 的按 cwd 分组，无 cwd 的归到「其他会话」
   const groupedSessions = useMemo(() => {
@@ -824,7 +832,7 @@ export default function App() {
       {/* ============ 顶栏 ============ */}
       <header className="header">
         <button className="icon-btn" onClick={() => { refreshEnvKeys(); loadSystemPrompt(systemPromptPath); loadModelConfig(); setShowSettings(true); }} title="设置">☰</button>
-        {/* 主区域切换 tab：助手（Pi 聊天）/ 工具（FastAPI 工具区） */}
+        {/* 主区域切换 tab：助手（Pi 聊天）/ 工具（FastAPI 工具区）/ 文件（文件浏览器） */}
         <div className="header-tabs">
           <button
             className={`header-tab ${activeView === "chat" ? "active" : ""}`}
@@ -834,6 +842,10 @@ export default function App() {
             className={`header-tab ${activeView === "tools" ? "active" : ""}`}
             onClick={() => setActiveView("tools")}
           >工具</button>
+          <button
+            className={`header-tab ${activeView === "files" ? "active" : ""}`}
+            onClick={() => setActiveView("files")}
+          >文件</button>
         </div>
         <span className={`header-status ${ready ? (busy ? "busy" : "ready") : "error"}`}>
           <span className="dot" />
@@ -861,6 +873,8 @@ export default function App() {
       <div className="body">
         {activeView === "tools" ? (
           <ToolsPanel />
+        ) : activeView === "files" ? (
+          <FileBrowser currentCwd={currentSessionCwd} />
         ) : (
         <>
         {/* 左侧栏 */}
@@ -1197,27 +1211,7 @@ export default function App() {
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 720 }}>
             <div className="modal-title">设置</div>
 
-            {/* API Key 管理 */}
-            <div className="settings-section">
-              <div className="settings-section-title">API 密钥</div>
-              <div className="setting-row" style={{ alignItems: "flex-start", flexDirection: "column", gap: "var(--space-2)" }}>
-                <div>
-                  <div className="setting-label">模型提供商密钥</div>
-                  <div className="setting-desc">从环境变量检测。未配置的需在系统环境变量中设置后重启应用。</div>
-                </div>
-                <div className="env-key-grid">
-                  {envKeys.map((k) => (
-                    <div key={k.env} className={`env-key-item ${k.configured ? "ok" : "missing"}`}>
-                      <span className={`env-key-dot ${k.configured ? "ok" : "missing"}`} />
-                      <span className="env-key-provider">{k.provider}</span>
-                      <code className="env-key-env">{k.env}</code>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* 模型配置 */}
+            {/* 模型配置（含 API Key 管理）*/}
             <div className="settings-section">
               <div className="settings-section-title" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span>模型配置</span>
@@ -1319,7 +1313,7 @@ export default function App() {
                       {modelConfigSaving ? "保存中…" : "保存模型配置"}
                     </button>
                     <span className="model-config-hint">
-                      保存后自动应用到环境变量，新会话立即生效。配置文件：~/.pi/agent/model-config.json
+                      配置 API Key 后保存即注入环境变量，新会话立即生效。配置文件：~/.pi/agent/model-config.json
                     </span>
                   </div>
                 </>
