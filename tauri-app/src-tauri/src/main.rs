@@ -628,9 +628,25 @@ fn resolve_sidecar(resource_dir: Option<&std::path::Path>) -> Result<(Command, s
     for ps_dir in candidates {
         if !ps_dir.is_dir() { continue; }
         if ps_dir.join("main.py").is_file() {
-            // 找系统 python；Windows 上 `python` 优先，否则 `python3`
-            let py = if cfg!(windows) { "python" } else { "python3" };
-            let mut cmd = Command::new(py);
+            // 优先用项目 venv 里的 python（.venv/Scripts/python.exe on Windows,
+            // .venv/bin/python on Unix），因为依赖装在 venv 里，用系统 python
+            // 会因 import 失败导致 sidecar 进程秒崩。
+            // 没有 venv 才回退到系统 python（生产打包用 PyInstaller exe，
+            // 走上面的 resource_dir 分支，不会到这里）。
+            let venv_python = if cfg!(windows) {
+                ps_dir.join(".venv").join("Scripts").join("python.exe")
+            } else {
+                ps_dir.join(".venv").join("bin").join("python")
+            };
+            let (py, using_venv) = if venv_python.is_file() {
+                (venv_python.to_string_lossy().to_string(), true)
+            } else {
+                let fallback = if cfg!(windows) { "python" } else { "python3" };
+                (fallback.to_string(), false)
+            };
+            eprintln!("[sidecar] 使用 python: {} ({})", py,
+                if using_venv { "venv" } else { "系统 fallback" });
+            let mut cmd = Command::new(&py);
             cmd.arg("main.py");
             cmd.current_dir(&ps_dir);
             eprintln!("[sidecar] 选中: {} (python {})", ps_dir.display(), py);
