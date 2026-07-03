@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { readFile } from "@tauri-apps/plugin-fs";
 
 interface ToolDef {
   id: string;
@@ -126,13 +127,12 @@ export function ToolsPanel() {
     setSavedPath(null);
     setJsonResult(null);
     try {
-      // 用 fetch 读本地文件为 Blob 再上传（Tauri webview 支持读取 file:// 协议）
-      // 若 fetch file:// 失败，降级提示用户
+      // 用 Tauri fs 插件读本地文件为字节数组，再包成 Blob 上传。
+      // 不能用 fetch('file://...')：Tauri webview 默认禁止 file:// 协议（报 Failed to fetch）。
       let fileBlob: Blob;
       try {
-        const fileResp = await fetch(`file://${filePath}`);
-        if (!fileResp.ok) throw new Error(`读取本地文件失败 HTTP ${fileResp.status}`);
-        fileBlob = await fileResp.blob();
+        const bytes = await readFile(filePath);
+        fileBlob = new Blob([bytes]);
       } catch (e) {
         throw new Error(`无法读取文件 ${filePath}：${e}。请确认路径正确。`);
       }

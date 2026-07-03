@@ -9,6 +9,10 @@
     "core:window:default",
     "core:webview:default",
     "core:app:default",
-    "dialog:default"
+    "dialog:default",
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [{ "path": "**" }]
+    }
   ]
 }
