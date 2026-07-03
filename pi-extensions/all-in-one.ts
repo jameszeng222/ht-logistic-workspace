@@ -1,5 +1,6 @@
 // ~/.pi/agent/extensions/all-in-one.ts
-// 全场景助理 Extension：覆盖 数据分析 / 文档处理 / 自动化 / 任务管理 四域
+// 全场景助理 Extension：覆盖 数据分析 / 文档处理 / 自动化 / 任务管理 / HT 物流 五域
+// HT 物流域的 5 个工具通过 HTTP 调用 Python sidecar（python-sidecar/，FastAPI on 127.0.0.1:8000）。
 //
 // 依赖安装（在 ~/.pi/agent/extensions/ 目录下）：
 //   cd ~/.pi/agent/extensions
@@ -80,10 +81,47 @@ async function callSidecarTool(
   };
 }
 
+/**
+ * 调用返回 JSON 的 sidecar 工具：读本地文件 → multipart 上传 → 直接把 JSON 结果回给 LLM。
+ * 与 callSidecarTool 的区别：sidecar 返回 JSON（非二进制），不落盘，让 AI 直接解读结构化结果。
+ * 用于 data-analysis 这类「输出供 AI 解读而非供用户下载」的工具。
+ */
+async function callSidecarJsonTool(
+  endpoint: string,
+  filePath: string
+): Promise<{ content: any[]; details: any }> {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`输入文件不存在：${filePath}`);
+  }
+  const fileBytes = fs.readFileSync(filePath);
+  const fileName = path.basename(filePath);
+  const form = new FormData();
+  form.append("file", new Blob([fileBytes]), fileName);
+
+  let resp: Response;
+  try {
+    resp = await fetch(`${SIDECAR_URL}${endpoint}`, { method: "POST", body: form });
+  } catch (e: any) {
+    throw new Error(`无法连接 sidecar（${SIDECAR_URL}）：${e.message}。请确认 Tauri 已启动 Python sidecar。`);
+  }
+  if (!resp.ok) {
+    let detail = "";
+    try { detail = (await resp.json()).detail || ""; } catch {}
+    throw new Error(`工具执行失败 HTTP ${resp.status}：${detail || resp.statusText}`);
+  }
+  const data = await resp.json();
+  return {
+    content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    details: { raw: data },
+  };
+}
+
 export default function (pi: ExtensionAPI) {
   // 启动时禁用危险默认工具（bash/edit/write 等），保留 read + 所有扩展注册的工具。
   // 注意：pi.setActiveTools 对内置工具与动态注册工具都生效（见 pi.dev extensions 文档），
-  //       因此不能写成 setActiveTools(["read"])——那会把本扩展注册的 9 个工具也禁用掉。
+  //       因此不能写成 setActiveTools(["read"])——那会把本扩展注册的 16 个工具也禁用掉。
   pi.on("session_start", async (_event, ctx) => {
     let keep: string[] = ["read"];
     try {
@@ -97,7 +135,7 @@ export default function (pi: ExtensionAPI) {
       keep = ["read"];
     }
     pi.setActiveTools(keep);
-    ctx.ui.notify("全场景助理已加载（4 域工具就绪）", "info");
+    ctx.ui.notify("全场景助理已加载（5 域工具就绪，含 HT 物流）", "info");
   });
 
   // ==================== 数据分析域 ====================
@@ -473,6 +511,17 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params) {
       return callSidecarTool("/api/tools/customs-extractor", params.filePath, "xlsx", "customs-extracted");
+    },
+  });
+
+  pi.registerTool({
+    name: "logistic_data_analysis",
+    description: "Excel 数据分析。上传 Excel/CSV，自动按列类型统计（数值列：均值/标准差/分位数/直方图；分类列：唯一值/Top 频次/占比；时间列：范围/跨度）并计算数值列间相关性，返回 JSON 报告。当用户要分析 Excel 数据分布、找异常、看趋势时使用，结果直接供 AI 解读。",
+    parameters: Type.Object({
+      filePath: Type.String({ description: "Excel/CSV 文件绝对路径（.xlsx/.xls/.csv）" }),
+    }),
+    async execute(_id, params) {
+      return callSidecarJsonTool("/api/tools/data-analysis", params.filePath);
     },
   });
 
