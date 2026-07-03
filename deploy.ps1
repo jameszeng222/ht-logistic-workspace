@@ -228,6 +228,23 @@ Write-Host ""
 $anyFail = $results | Where-Object { $_.status -eq "fail" }
 if ($anyFail) {
     Write-Host "Deploy finished with FAILURES — see [FAIL] lines above." -ForegroundColor Red
+    Write-Host ""
+    $sidecarFail = $results | Where-Object { $_.step -eq "sidecar deps" -and $_.status -eq "fail" }
+    if ($sidecarFail -and -not (Test-Path $venvPy)) {
+        Write-Host "--- Sidecar deps failed: Python likely missing or broken ---" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "If you have Python 3.13+/3.14+ (dev/preview) or the Windows Store stub," -ForegroundColor White
+        Write-Host "packages like pandas/numpy won't have prebuilt wheels and pip install fails." -ForegroundColor White
+        Write-Host ""
+        Write-Host "Option A — Auto-install Python 3.12 (recommended, no admin needed):" -ForegroundColor White
+        Write-Host "  .\scripts\install-python.ps1" -ForegroundColor White
+        Write-Host "  After install: close PowerShell, reopen, re-run .\deploy.ps1" -ForegroundColor White
+        Write-Host ""
+        Write-Host "Option B — Manual install:" -ForegroundColor White
+        Write-Host "  Download Python 3.12 from https://www.python.org/downloads/" -ForegroundColor White
+        Write-Host "  CHECK 'Add python.exe to PATH' during install" -ForegroundColor White
+        Write-Host ""
+    }
     Write-Host "Fix the failing step, then re-run: .\deploy.ps1" -ForegroundColor Red
     exit 1
 } else {

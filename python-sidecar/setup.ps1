@@ -85,7 +85,13 @@ $pythonExe = Find-Python
 if (-not $pythonExe) {
     Write-Host "ERROR: No working Python 3.10+ found." -ForegroundColor Red
     Write-Host "The Python sidecar requires Python. The Windows Store 'python' stub does NOT count." -ForegroundColor White
-    Write-Host "Install real Python:" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Option A — Auto-install (recommended, no admin needed):" -ForegroundColor White
+    Write-Host "  Go to repo root and run:" -ForegroundColor White
+    Write-Host "    .\scripts\install-python.ps1" -ForegroundColor White
+    Write-Host "  It downloads Python 3.12 and installs silently, then re-run this script." -ForegroundColor White
+    Write-Host ""
+    Write-Host "Option B — Manual install:" -ForegroundColor White
     Write-Host "  1. Download from https://www.python.org/downloads/" -ForegroundColor White
     Write-Host "  2. Run the installer and CHECK 'Add python.exe to PATH'" -ForegroundColor White
     Write-Host "  3. Reopen PowerShell and re-run this script" -ForegroundColor White
