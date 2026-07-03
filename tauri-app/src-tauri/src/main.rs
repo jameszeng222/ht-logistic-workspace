@@ -559,6 +559,339 @@ async fn write_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&abs, content).map_err(|e| format!("写入失败：{e}"))
 }
 
+/// 获取扩展目录路径
+fn get_extensions_dir() -> Result<std::path::PathBuf, String> {
+    let agent = get_agent_dir().ok_or("找不到 agent 目录")?;
+    let ext_dir = agent.join("extensions");
+    if !ext_dir.exists() {
+        std::fs::create_dir_all(&ext_dir).map_err(|e| format!("创建 extensions 目录失败：{e}"))?;
+    }
+    Ok(ext_dir)
+}
+
+/// 递归复制目录
+fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+    if !src.is_dir() {
+        return Err(format!("源路径不是目录：{}", src.display()));
+    }
+    std::fs::create_dir_all(dst).map_err(|e| format!("创建目标目录失败：{e}"))?;
+    for entry in std::fs::read_dir(src).map_err(|e| format!("读取源目录失败：{e}"))? {
+        let entry = entry.map_err(|e| format!("读取目录项失败：{e}"))?;
+        let ty = entry.file_type().map_err(|e| format!("获取文件类型失败：{e}"))?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_all(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path).map_err(|e| format!("复制文件失败：{e}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// 列出已安装的扩展（extensions 目录下的子目录/文件）
+#[tauri::command]
+async fn list_extensions() -> Result<Vec<serde_json::Value>, String> {
+    let ext_dir = get_extensions_dir()?;
+    let mut result = Vec::new();
+    if !ext_dir.is_dir() {
+        return Ok(result);
+    }
+    for entry in std::fs::read_dir(&ext_dir).map_err(|e| format!("读取扩展目录失败：{e}"))? {
+        let entry = entry.map_err(|e| format!("读取目录项失败：{e}"))?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        let is_dir = entry.file_type().map_err(|e| e.to_string())?.is_dir();
+        let meta = entry.metadata().ok();
+        let mtime = meta.as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+
+        // 尝试读取扩展描述（如果是目录，找 README.md / package.json / index.ts）
+        let mut description = String::new();
+        if is_dir {
+            let readme = path.join("README.md");
+            if readme.is_file() {
+                if let Ok(content) = std::fs::read_to_string(&readme) {
+                    description = content.lines().next().unwrap_or("").to_string();
+                }
+            }
+            if description.is_empty() {
+                let pkg = path.join("package.json");
+                if pkg.is_file() {
+                    if let Ok(content) = std::fs::read_to_string(&pkg) {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                            if let Some(desc) = json.get("description").and_then(|v| v.as_str()) {
+                                description = desc.to_string();
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            description = format!("单文件扩展 ({})", path.extension().and_then(|e| e.to_str()).unwrap_or(""));
+        }
+
+        result.push(serde_json::json!({
+            "name": name,
+            "path": path.to_string_lossy().to_string(),
+            "isDir": is_dir,
+            "description": description,
+            "mtime": mtime,
+            "size": size,
+        }));
+    }
+    result.sort_by(|a, b| {
+        a.get("name").and_then(|v| v.as_str()).unwrap_or("")
+            .cmp(b.get("name").and_then(|v| v.as_str()).unwrap_or(""))
+    });
+    Ok(result)
+}
+
+/// 安装扩展：将源路径（文件或目录）复制到 extensions 目录
+#[tauri::command]
+async fn install_extension(source_path: String) -> Result<serde_json::Value, String> {
+    let ext_dir = get_extensions_dir()?;
+    let src = std::path::Path::new(&source_path);
+    if !src.exists() {
+        return Err(format!("源路径不存在：{source_path}"));
+    }
+    let name = src.file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("无效的源路径")?
+        .to_string();
+    let dst = ext_dir.join(&name);
+    if dst.exists() {
+        return Err(format!("扩展已存在：{name}，请先删除旧版本"));
+    }
+    let is_dir = src.is_dir();
+    if is_dir {
+        copy_dir_all(src, &dst)?;
+    } else {
+        std::fs::copy(src, &dst).map_err(|e| format!("复制文件失败：{e}"))?;
+    }
+    Ok(serde_json::json!({
+        "name": name,
+        "path": dst.to_string_lossy().to_string(),
+        "isDir": is_dir,
+    }))
+}
+
+/// 卸载扩展：删除 extensions 目录下的指定扩展
+#[tauri::command]
+async fn uninstall_extension(name: String) -> Result<(), String> {
+    let ext_dir = get_extensions_dir()?;
+    // 安全校验：name 不能包含路径分隔符，防止路径穿越
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err("无效的扩展名称".into());
+    }
+    let target = ext_dir.join(&name);
+    if !target.exists() {
+        return Err(format!("扩展不存在：{name}"));
+    }
+    if target.is_dir() {
+        std::fs::remove_dir_all(&target).map_err(|e| format!("删除扩展目录失败：{e}"))?;
+    } else {
+        std::fs::remove_file(&target).map_err(|e| format!("删除扩展文件失败：{e}"))?;
+    }
+    Ok(())
+}
+
+// ============================ 模型配置管理 ============================
+
+/// 模型提供商配置
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct ModelProvider {
+    id: String,
+    name: String,
+    api_key: String,
+    base_url: Option<String>,
+    models: Vec<String>,
+    default_model: Option<String>,
+    enabled: bool,
+}
+
+/// 模型配置
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ModelConfig {
+    providers: Vec<ModelProvider>,
+    default_provider: Option<String>,
+    default_model: Option<String>,
+}
+
+impl Default for ModelConfig {
+    fn default() -> Self {
+        ModelConfig {
+            providers: vec![
+                ModelProvider {
+                    id: "anthropic".into(),
+                    name: "Anthropic".into(),
+                    api_key: String::new(),
+                    base_url: None,
+                    models: vec!["claude-3-5-sonnet-latest".into(), "claude-3-opus-latest".into(), "claude-3-haiku-20240307".into()],
+                    default_model: Some("claude-3-5-sonnet-latest".into()),
+                    enabled: false,
+                },
+                ModelProvider {
+                    id: "openai".into(),
+                    name: "OpenAI".into(),
+                    api_key: String::new(),
+                    base_url: None,
+                    models: vec!["gpt-4o".into(), "gpt-4o-mini".into(), "gpt-4-turbo".into()],
+                    default_model: Some("gpt-4o".into()),
+                    enabled: false,
+                },
+                ModelProvider {
+                    id: "deepseek".into(),
+                    name: "DeepSeek".into(),
+                    api_key: String::new(),
+                    base_url: Some("https://api.deepseek.com/v1".into()),
+                    models: vec!["deepseek-chat".into(), "deepseek-reasoner".into()],
+                    default_model: Some("deepseek-chat".into()),
+                    enabled: false,
+                },
+                ModelProvider {
+                    id: "google".into(),
+                    name: "Google Gemini".into(),
+                    api_key: String::new(),
+                    base_url: None,
+                    models: vec!["gemini-2.0-flash".into(), "gemini-2.0-pro".into(), "gemini-1.5-pro".into()],
+                    default_model: Some("gemini-2.0-flash".into()),
+                    enabled: false,
+                },
+                ModelProvider {
+                    id: "openrouter".into(),
+                    name: "OpenRouter".into(),
+                    api_key: String::new(),
+                    base_url: Some("https://openrouter.ai/api/v1".into()),
+                    models: vec!["anthropic/claude-3.5-sonnet".into(), "openai/gpt-4o".into(), "google/gemini-flash-1.5".into()],
+                    default_model: Some("anthropic/claude-3.5-sonnet".into()),
+                    enabled: false,
+                },
+            ],
+            default_provider: None,
+            default_model: None,
+        }
+    }
+}
+
+/// 模型配置文件路径
+fn get_model_config_path() -> Result<std::path::PathBuf, String> {
+    let agent = get_agent_dir().ok_or("找不到 agent 目录")?;
+    Ok(agent.join("model-config.json"))
+}
+
+/// 读取模型配置
+#[tauri::command]
+async fn get_model_config() -> Result<serde_json::Value, String> {
+    let path = get_model_config_path()?;
+    if !path.exists() {
+        let default = ModelConfig::default();
+        return Ok(serde_json::to_value(&default).map_err(|e| e.to_string())?);
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败：{e}"))?;
+    let config: ModelConfig = serde_json::from_str(&content).unwrap_or_else(|_| ModelConfig::default());
+    Ok(serde_json::to_value(&config).map_err(|e| e.to_string())?)
+}
+
+/// 保存模型配置
+#[tauri::command]
+async fn save_model_config(config: serde_json::Value) -> Result<(), String> {
+    let path = get_model_config_path()?;
+    let agent_dir = path.parent().ok_or("无效的配置路径")?;
+    if !agent_dir.exists() {
+        std::fs::create_dir_all(agent_dir).map_err(|e| format!("创建目录失败：{e}"))?;
+    }
+    let content = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+    std::fs::write(&path, content).map_err(|e| format!("写入配置失败：{e}"))?;
+    Ok(())
+}
+
+/// 应用模型配置到环境变量（API Key 注入到当前进程环境，供 Pi 读取）
+#[tauri::command]
+async fn apply_model_config() -> Result<String, String> {
+    let path = get_model_config_path()?;
+    if !path.exists() {
+        return Ok("无配置可应用".into());
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败：{e}"))?;
+    let config: ModelConfig = serde_json::from_str(&content).unwrap_or_else(|_| ModelConfig::default());
+
+    let mut applied = Vec::new();
+    for provider in &config.providers {
+        if !provider.enabled || provider.api_key.is_empty() {
+            continue;
+        }
+        let env_name = match provider.id.as_str() {
+            "anthropic" => "ANTHROPIC_API_KEY",
+            "openai" => "OPENAI_API_KEY",
+            "deepseek" => "DEEPSEEK_API_KEY",
+            "google" | "gemini" => "GOOGLE_API_KEY",
+            "openrouter" => "OPENROUTER_API_KEY",
+            "mistral" => "MISTRAL_API_KEY",
+            "groq" => "GROQ_API_KEY",
+            _ => continue,
+        };
+        std::env::set_var(env_name, &provider.api_key);
+        applied.push(provider.name.clone());
+
+        // 如果有 base_url，也设置对应的环境变量（如果 Pi 支持的话）
+        if let Some(base_url) = &provider.base_url {
+            let base_env = format!("{}_BASE_URL", provider.id.to_uppercase());
+            std::env::set_var(&base_env, base_url);
+        }
+    }
+
+    if applied.is_empty() {
+        Ok("没有启用的提供商".into())
+    } else {
+        Ok(format!("已应用：{}", applied.join("、")))
+    }
+}
+
+/// 同步应用模型配置到环境变量（供 setup 同步调用）
+fn apply_model_config_sync() -> Result<String, String> {
+    let path = get_model_config_path()?;
+    if !path.exists() {
+        return Ok("无配置可应用".into());
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败：{e}"))?;
+    let config: ModelConfig = serde_json::from_str(&content).unwrap_or_else(|_| ModelConfig::default());
+
+    let mut applied = Vec::new();
+    for provider in &config.providers {
+        if !provider.enabled || provider.api_key.is_empty() {
+            continue;
+        }
+        let env_name = match provider.id.as_str() {
+            "anthropic" => "ANTHROPIC_API_KEY",
+            "openai" => "OPENAI_API_KEY",
+            "deepseek" => "DEEPSEEK_API_KEY",
+            "google" | "gemini" => "GOOGLE_API_KEY",
+            "openrouter" => "OPENROUTER_API_KEY",
+            "mistral" => "MISTRAL_API_KEY",
+            "groq" => "GROQ_API_KEY",
+            _ => continue,
+        };
+        std::env::set_var(env_name, &provider.api_key);
+        applied.push(provider.name.clone());
+
+        if let Some(base_url) = &provider.base_url {
+            let base_env = format!("{}_BASE_URL", provider.id.to_uppercase());
+            std::env::set_var(&base_env, base_url);
+        }
+    }
+
+    if applied.is_empty() {
+        Ok("没有启用的提供商".into())
+    } else {
+        Ok(format!("已应用：{}", applied.join("、")))
+    }
+}
+
 #[tauri::command]
 async fn stop_pi(state: State<'_, PiState>) -> Result<(), String> {
     if let Some(mut child) = state.child.lock().unwrap().take() {
@@ -813,9 +1146,13 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             start_pi, stop_pi, send_command, send_request, scan_sessions, delete_session, check_env_keys, read_text_file, write_text_file, read_session_history,
             sidecar_url, sidecar_status, stop_sidecar,
-            write_binary_file, open_in_explorer
+            write_binary_file, open_in_explorer,
+            list_extensions, install_extension, uninstall_extension,
+            get_model_config, save_model_config, apply_model_config
         ])
         .setup(|app| {
+            // 启动前先应用模型配置（把 API Key 注入环境变量）
+            let _ = apply_model_config_sync();
             // 启动 Python 工具 sidecar（不阻塞，后台轮询健康后 emit sidecar-status）
             spawn_sidecar(app.handle());
             #[cfg(debug_assertions)]

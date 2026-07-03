@@ -6,7 +6,7 @@
 // 2. 会话无法新增 —— new_session RPC + scan_sessions 扫描历史
 // 3. 输入框无法发送 —— StrictMode 副作用消除
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { PiEvent } from "./pi-client";
@@ -16,6 +16,7 @@ import { ExtensionManager } from "./ExtensionManager";
 import { rebuildTurnsFromMessages } from "./utils";
 import { ChartView, extractChartConfig } from "./Chart";
 import { ToolsPanel } from "./ToolsPanel";
+import { BranchNavigator } from "./BranchNavigator";
 import type { ToolCall, AssistantMsg, Turn } from "./types";
 import "./styles.css";
 
@@ -25,6 +26,15 @@ interface SessionInfo { path: string; name: string; mtime: number; size: number;
 interface ModelInfo { id: string; name: string; provider: string; contextWindow?: number; reasoning?: boolean; }
 interface PiState { model: ModelInfo | null; thinkingLevel: string; isStreaming: boolean; sessionFile?: string; sessionName?: string; messageCount: number; }
 interface SessionStats { contextUsage?: { percent: number; tokens: number; contextWindow: number }; cost?: number; }
+interface ModelProvider {
+  id: string;
+  name: string;
+  apiKey: string;
+  baseUrl?: string;
+  models: string[];
+  defaultModel?: string;
+  enabled: boolean;
+}
 
 let toastId = 0;
 
@@ -94,6 +104,16 @@ export default function App() {
   const [envKeys, setEnvKeys] = useState<{provider: string; env: string; configured: boolean}[]>([]);
   const [autoConfirm, setAutoConfirm] = useState(() => localStorage.getItem("pi-auto-confirm") === "true");
   const [showExtManager, setShowExtManager] = useState(false);
+
+  // 模型配置
+  const [modelConfig, setModelConfig] = useState<{
+    providers: ModelProvider[];
+    defaultProvider?: string;
+    defaultModel?: string;
+  } | null>(null);
+  const [modelConfigDirty, setModelConfigDirty] = useState(false);
+  const [modelConfigSaving, setModelConfigSaving] = useState(false);
+  const [editingProvider, setEditingProvider] = useState<string | null>(null);
 
   // 系统提示词编辑器（读写 ~/.pi/agent/SYSTEM.md）
   const [systemPrompt, setSystemPrompt] = useState("");
@@ -202,6 +222,76 @@ export default function App() {
       const list = await invoke<{provider: string; env: string; configured: boolean}[]>("check_env_keys");
       setEnvKeys(list);
     } catch { /* 静默 */ }
+  }, []);
+
+  // 模型配置加载/保存/应用
+  const loadModelConfig = useCallback(async () => {
+    try {
+      const data = await invoke<any>("get_model_config");
+      // 字段名转换（snake_case -> camelCase）
+      const providers: ModelProvider[] = (data?.providers || []).map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        apiKey: p.api_key || p.apiKey || "",
+        baseUrl: p.base_url || p.baseUrl,
+        models: p.models || [],
+        defaultModel: p.default_model || p.defaultModel,
+        enabled: !!p.enabled,
+      }));
+      setModelConfig({
+        providers,
+        defaultProvider: data.default_provider || data.defaultProvider,
+        defaultModel: data.default_model || data.defaultModel,
+      });
+      setModelConfigDirty(false);
+    } catch (e) {
+      toast(`加载模型配置失败: ${e}`, "error");
+    }
+  }, [toast]);
+
+  const saveModelConfig = useCallback(async () => {
+    if (!modelConfig) return;
+    setModelConfigSaving(true);
+    try {
+      // 转换为 snake_case
+      const data = {
+        providers: modelConfig.providers.map((p) => ({
+          id: p.id,
+          name: p.name,
+          api_key: p.apiKey,
+          base_url: p.baseUrl || null,
+          models: p.models,
+          default_model: p.defaultModel || null,
+          enabled: p.enabled,
+        })),
+        default_provider: modelConfig.defaultProvider || null,
+        default_model: modelConfig.defaultModel || null,
+      };
+      await invoke("save_model_config", { config: data });
+      // 应用到环境变量
+      const result = await invoke<string>("apply_model_config");
+      setModelConfigDirty(false);
+      toast(`模型配置已保存。${result}`, "success");
+      // 刷新可用模型列表
+      refreshModels();
+    } catch (e) {
+      toast(`保存失败: ${e}`, "error");
+    } finally {
+      setModelConfigSaving(false);
+    }
+  }, [modelConfig, toast, refreshModels]);
+
+  const updateProvider = useCallback((providerId: string, updates: Partial<ModelProvider>) => {
+    setModelConfig((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        providers: prev.providers.map((p) =>
+          p.id === providerId ? { ...p, ...updates } : p
+        ),
+      };
+    });
+    setModelConfigDirty(true);
   }, []);
 
   // ====== 历史恢复：get_messages → 重建 turns ======
@@ -496,6 +586,25 @@ export default function App() {
     }
   }, [toast]);
 
+  // 切换会话分支（跳转到指定 entry）
+  // Pi 支持 get_tree 拿分支树，goto_entry 跳转到指定 entry
+  const switchBranch = useCallback(async (entryId: string) => {
+    if (!entryId) return;
+    try {
+      await invoke("send_command", { command: { type: "goto_entry", entryId } });
+      await refreshState();
+      const data = await rpc({ type: "get_messages" });
+      const msgs = data?.messages || [];
+      if (msgs.length > 0) {
+        const rebuilt = rebuildTurnsFromMessages(msgs);
+        setTurns(rebuilt);
+      }
+      toast("已切换分支", "success");
+    } catch (e) {
+      toast(`切换分支失败: ${e}`, "error");
+    }
+  }, [refreshState, rpc, toast]);
+
   const deleteSession = useCallback(async (path: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!confirm("确定删除这个会话？")) return;
@@ -691,11 +800,30 @@ export default function App() {
       })
     : sessions;
 
+  // 按工作目录分组（学 pi-web 的会话浏览器）
+  // 有 cwd 的按 cwd 分组，无 cwd 的归到「其他会话」
+  const groupedSessions = useMemo(() => {
+    const groups = new Map<string, SessionInfo[]>();
+    for (const s of filteredSessions) {
+      const key = s.cwd && s.cwd.trim() ? s.cwd : "__other__";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(s);
+    }
+    // 排序：有 cwd 的组按组名字母序，「其他会话」放最后
+    const entries = Array.from(groups.entries());
+    entries.sort(([a], [b]) => {
+      if (a === "__other__") return 1;
+      if (b === "__other__") return -1;
+      return a.localeCompare(b);
+    });
+    return entries;
+  }, [filteredSessions]);
+
   return (
     <div className="app">
       {/* ============ 顶栏 ============ */}
       <header className="header">
-        <button className="icon-btn" onClick={() => { refreshEnvKeys(); loadSystemPrompt(systemPromptPath); setShowSettings(true); }} title="设置">☰</button>
+        <button className="icon-btn" onClick={() => { refreshEnvKeys(); loadSystemPrompt(systemPromptPath); loadModelConfig(); setShowSettings(true); }} title="设置">☰</button>
         {/* 主区域切换 tab：助手（Pi 聊天）/ 工具（FastAPI 工具区） */}
         <div className="header-tabs">
           <button
@@ -724,7 +852,7 @@ export default function App() {
           {logs.length > 0 && <span className="badge">{logs.length}</span>}
         </button>
         {/* 设置按钮 */}
-        <button className="icon-btn" onClick={() => { refreshEnvKeys(); loadSystemPrompt(systemPromptPath); setShowSettings(true); }} title="设置">⚙</button>
+        <button className="icon-btn" onClick={() => { refreshEnvKeys(); loadSystemPrompt(systemPromptPath); loadModelConfig(); setShowSettings(true); }} title="设置">⚙</button>
         {/* 新建会话 */}
         <button className="icon-btn" onClick={newSession} disabled={busy} title="新建会话">+ 新会话</button>
       </header>
@@ -760,50 +888,62 @@ export default function App() {
                 <div style={{ padding: "12px 8px", fontSize: 12, color: "var(--fg-muted)" }}>
                   {sessions.length === 0 ? "暂无历史会话" : "无匹配会话"}
                 </div>
-              ) : filteredSessions.map((s) => {
-                const isActive = currentSessionPath === s.path;
-                const isPreviewing = previewPath === s.path && !isActive;
-                const isRenaming = renamingPath === s.path;
-                return (
-                  <div
-                    key={s.path}
-                    className={`session-item ${isActive ? "active" : ""} ${isPreviewing ? "previewing" : ""}`}
-                    onClick={() => !isRenaming && switchSession(s.path)}
-                  >
-                    <span className="session-icon">💬</span>
-                    <div className="session-info">
-                      {isRenaming ? (
-                        <input
-                          className="session-rename-input"
-                          autoFocus
-                          value={renameInput}
-                          onChange={(e) => setRenameInput(e.target.value)}
-                          onClick={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") { e.preventDefault(); confirmRename(); }
-                            if (e.key === "Escape") { e.preventDefault(); setRenamingPath(null); }
-                          }}
-                          onBlur={() => confirmRename()}
-                        />
-                      ) : (
-                        <div className="session-name">{s.title || "未命名会话"}</div>
-                      )}
-                      {!isRenaming && (
-                        <div className="session-meta">
-                          {formatTime(s.mtime)}
-                          {s.cwd && <span className="session-cwd" title={s.cwd}> · {s.cwd}</span>}
-                        </div>
-                      )}
-                    </div>
-                    {isActive && !isRenaming && (
-                      <div className="session-actions">
-                        <button className="session-action-btn" onClick={(e) => { e.stopPropagation(); startRename(); }} title="重命名">✎</button>
-                      </div>
-                    )}
-                    <button className="session-delete" onClick={(e) => deleteSession(s.path, e)} title="删除">✕</button>
+              ) : groupedSessions.map(([cwd, groupSessions]) => (
+                <div key={cwd} className="session-group">
+                  <div className="session-group-header">
+                    <span className="session-group-icon">📁</span>
+                    <span className="session-group-title" title={cwd === "__other__" ? "无工作目录的会话" : cwd}>
+                      {cwd === "__other__" ? "其他会话" : (cwd.length > 30 ? "…" + cwd.slice(-30) : cwd)}
+                    </span>
+                    <span className="session-group-count">{groupSessions.length}</span>
                   </div>
-                );
-              })}
+                  <div className="session-group-items">
+                    {groupSessions.map((s) => {
+                      const isActive = currentSessionPath === s.path;
+                      const isPreviewing = previewPath === s.path && !isActive;
+                      const isRenaming = renamingPath === s.path;
+                      return (
+                        <div
+                          key={s.path}
+                          className={`session-item ${isActive ? "active" : ""} ${isPreviewing ? "previewing" : ""}`}
+                          onClick={() => !isRenaming && switchSession(s.path)}
+                        >
+                          <span className="session-icon">💬</span>
+                          <div className="session-info">
+                            {isRenaming ? (
+                              <input
+                                className="session-rename-input"
+                                autoFocus
+                                value={renameInput}
+                                onChange={(e) => setRenameInput(e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") { e.preventDefault(); confirmRename(); }
+                                  if (e.key === "Escape") { e.preventDefault(); setRenamingPath(null); }
+                                }}
+                                onBlur={() => confirmRename()}
+                              />
+                            ) : (
+                              <div className="session-name">{s.title || "未命名会话"}</div>
+                            )}
+                            {!isRenaming && (
+                              <div className="session-meta">
+                                {formatTime(s.mtime)}
+                              </div>
+                            )}
+                          </div>
+                          {isActive && !isRenaming && (
+                            <div className="session-actions">
+                              <button className="session-action-btn" onClick={(e) => { e.stopPropagation(); startRename(); }} title="重命名">✎</button>
+                            </div>
+                          )}
+                          <button className="session-delete" onClick={(e) => deleteSession(s.path, e)} title="删除">✕</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -816,6 +956,13 @@ export default function App() {
                 <button className="session-op-btn" onClick={openForkModal} disabled={busy}>⑂ Fork</button>
                 <button className="session-op-btn" onClick={cloneSession} disabled={busy}>⧉ 克隆</button>
               </div>
+            </div>
+          )}
+
+          {/* 会话分支导航 */}
+          {currentSessionPath && (
+            <div className="sidebar-section" style={{ flex: "0 0 auto", maxHeight: "40vh", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+              <BranchNavigator sessionPath={currentSessionPath} onSwitchBranch={switchBranch} />
             </div>
           )}
 
@@ -1068,6 +1215,115 @@ export default function App() {
                   ))}
                 </div>
               </div>
+            </div>
+
+            {/* 模型配置 */}
+            <div className="settings-section">
+              <div className="settings-section-title" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span>模型配置</span>
+                {modelConfigDirty && (
+                  <span style={{ color: "var(--warning)", fontSize: 11, fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>
+                    有未保存改动
+                  </span>
+                )}
+              </div>
+              {!modelConfig ? (
+                <div style={{ padding: "var(--space-4) 0", textAlign: "center", color: "var(--fg-muted)", fontSize: 13 }}>
+                  加载中…
+                </div>
+              ) : (
+                <>
+                  <div className="model-config-list">
+                    {modelConfig.providers.map((provider) => (
+                      <div
+                        key={provider.id}
+                        className={`model-provider-card ${provider.enabled ? "enabled" : ""} ${editingProvider === provider.id ? "editing" : ""}`}
+                      >
+                        <div
+                          className="model-provider-head"
+                          onClick={() => setEditingProvider(editingProvider === provider.id ? null : provider.id)}
+                        >
+                          <div className="model-provider-left">
+                            <div className={`toggle ${provider.enabled ? "on" : ""}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                updateProvider(provider.id, { enabled: !provider.enabled });
+                              }}
+                            />
+                            <span className="model-provider-name">{provider.name}</span>
+                            {provider.apiKey && provider.enabled && (
+                              <span className="model-provider-status ok">已配置</span>
+                            )}
+                            {!provider.apiKey && (
+                              <span className="model-provider-status missing">未配置</span>
+                            )}
+                          </div>
+                          <span className="model-provider-chevron">
+                            {editingProvider === provider.id ? "▴" : "▾"}
+                          </span>
+                        </div>
+                        {editingProvider === provider.id && (
+                          <div className="model-provider-body">
+                            <div className="model-config-field">
+                              <label className="model-config-label">API Key</label>
+                              <input
+                                type="password"
+                                className="model-config-input"
+                                value={provider.apiKey}
+                                placeholder={`输入 ${provider.name} API Key`}
+                                onChange={(e) => updateProvider(provider.id, { apiKey: e.target.value })}
+                              />
+                            </div>
+                            <div className="model-config-field">
+                              <label className="model-config-label">Base URL（可选）</label>
+                              <input
+                                type="text"
+                                className="model-config-input"
+                                value={provider.baseUrl || ""}
+                                placeholder="自定义 API 地址"
+                                onChange={(e) => updateProvider(provider.id, { baseUrl: e.target.value })}
+                              />
+                            </div>
+                            <div className="model-config-field">
+                              <label className="model-config-label">默认模型</label>
+                              <select
+                                className="model-config-select"
+                                value={provider.defaultModel || ""}
+                                onChange={(e) => updateProvider(provider.id, { defaultModel: e.target.value })}
+                              >
+                                {provider.models.map((m) => (
+                                  <option key={m} value={m}>{m}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="model-config-field">
+                              <label className="model-config-label">可用模型（每行一个）</label>
+                              <textarea
+                                className="model-config-textarea"
+                                value={provider.models.join("\n")}
+                                rows={3}
+                                onChange={(e) => updateProvider(provider.id, { models: e.target.value.split("\n").filter((s) => s.trim()) })}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="model-config-actions">
+                    <button
+                      className="btn-primary"
+                      onClick={saveModelConfig}
+                      disabled={modelConfigSaving || !modelConfigDirty}
+                    >
+                      {modelConfigSaving ? "保存中…" : "保存模型配置"}
+                    </button>
+                    <span className="model-config-hint">
+                      保存后自动应用到环境变量，新会话立即生效。配置文件：~/.pi/agent/model-config.json
+                    </span>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* 主题 */}

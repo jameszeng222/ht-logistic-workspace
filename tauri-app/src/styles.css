@@ -325,6 +325,34 @@ body {
 
 /* 会话列表 */
 .session-list { flex: 1; overflow-y: auto; padding: var(--space-1) var(--space-2) var(--space-2); }
+
+.session-group { margin-bottom: var(--space-3); }
+.session-group-header {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: 11px;
+  color: var(--fg-muted);
+  text-transform: none;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.session-group-icon { font-size: 12px; }
+.session-group-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 10.5px;
+}
+.session-group-count {
+  background: var(--surface-hover);
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.session-group-items { display: flex; flex-direction: column; gap: var(--space-1); }
 .session-item {
   display: flex; align-items: center; gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
@@ -1073,6 +1101,204 @@ body {
   margin-bottom: var(--space-3);
 }
 
+/* 扩展管理 tabs */
+.ext-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  margin-bottom: var(--space-4);
+  width: fit-content;
+}
+.ext-tab {
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  padding: 6px 16px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: all var(--dur-fast) var(--ease);
+}
+.ext-tab:hover { color: var(--fg); }
+.ext-tab.active {
+  background: var(--primary);
+  color: var(--fg-on-primary);
+  font-weight: 500;
+}
+
+/* 安装栏 */
+.ext-install-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3);
+  background: var(--bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+.ext-install-hint {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+/* 已安装扩展项 */
+.ext-installed-item {
+  align-items: flex-start;
+}
+.ext-installed-item .ext-item-main {
+  gap: 4px;
+}
+.ext-item-meta {
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
+.ext-item-actions {
+  display: flex;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+.ext-item-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: all var(--dur-fast) var(--ease);
+}
+.ext-item-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+.ext-item-btn-danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: color-mix(in oklch, var(--danger) 10%, transparent);
+}
+
+/* ============ 模型配置 ============ */
+.model-config-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+.model-provider-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  transition: all var(--dur-fast) var(--ease);
+  background: var(--bg);
+}
+.model-provider-card.enabled {
+  border-color: color-mix(in oklch, var(--success) 30%, var(--border));
+}
+.model-provider-card.editing {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-soft);
+}
+.model-provider-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+.model-provider-head:hover {
+  background: var(--surface-hover);
+}
+.model-provider-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.model-provider-name {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--fg);
+}
+.model-provider-status {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.model-provider-status.ok {
+  background: color-mix(in oklch, var(--success) 15%, transparent);
+  color: var(--success);
+}
+.model-provider-status.missing {
+  background: var(--surface-hover);
+  color: var(--fg-subtle);
+}
+.model-provider-chevron {
+  color: var(--fg-subtle);
+  font-size: 10px;
+}
+.model-provider-body {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.model-config-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.model-config-label {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  font-weight: 500;
+}
+.model-config-input,
+.model-config-select,
+.model-config-textarea {
+  width: 100%;
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.model-config-input:focus,
+.model-config-select:focus,
+.model-config-textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: var(--ring);
+}
+.model-config-textarea {
+  resize: vertical;
+  min-height: 60px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.model-config-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.model-config-hint {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
 /* ============================================================
    日志查看器（Track 5 观测调试）
    ============================================================ */
@@ -1405,4 +1631,103 @@ body {
   border-radius: var(--radius-sm);
   max-height: 500px;
   overflow-y: auto;
+}
+
+/* ============ 会话分支导航 ============ */
+.branch-navigator {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.branch-nav-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+.branch-nav-title { font-size: 11px; }
+.branch-refresh-btn {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+}
+.branch-refresh-btn:hover { background: var(--surface-hover); color: var(--fg); }
+.branch-loading, .branch-empty, .branch-error {
+  padding: var(--space-3);
+  text-align: center;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.branch-error { color: var(--danger); }
+.branch-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 var(--space-2) var(--space-2);
+}
+.branch-node { min-width: 0; }
+.branch-node-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: 12px;
+  transition: background var(--dur-fast) var(--ease);
+  min-width: 0;
+}
+.branch-node-row:hover { background: var(--surface-hover); }
+.branch-node-row.current {
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 500;
+}
+.branch-node-row.user .branch-node-text { color: var(--fg); }
+.branch-node-row.assistant .branch-node-text { color: var(--fg-subtle); }
+.branch-collapse-btn {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 9px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  border-radius: 2px;
+}
+.branch-collapse-btn:hover { background: var(--surface-hover); color: var(--fg); }
+.branch-collapse-spacer { width: 16px; flex-shrink: 0; }
+.branch-node-icon { font-size: 12px; flex-shrink: 0; }
+.branch-node-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.branch-fork-badge {
+  font-size: 10px;
+  color: var(--primary);
+  flex-shrink: 0;
+  font-weight: 600;
+}
+.branch-children {
+  margin-left: 14px;
+  border-left: 1px solid var(--border-subtle);
+  padding-left: 4px;
 }
