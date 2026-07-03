@@ -1,0 +1,747 @@
+// src-tauri/src/main.rs
+// Tauri v2 + Pi RPC sidecar 集成（完整版）
+//
+// 命令：
+//   start_pi          启动 pi 子进程
+//   stop_pi            停止 pi 子进程
+//   send_command       发命令（不等响应）
+//   send_request       发命令并等响应（用于 get_state/get_available_models 等）
+//   scan_sessions      扫描 session-dir 列出历史会话
+//   delete_session     删除一个会话文件
+
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+use tokio::sync::oneshot;
+
+type ResponseMap = Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>>;
+
+struct PiState {
+    stdin: Mutex<Option<ChildStdin>>,
+    child: Mutex<Option<Child>>,
+    response_channels: ResponseMap,
+    next_request_id: AtomicU64,
+}
+
+/// Python 工具 sidecar 状态。
+/// `ready` 由后台健康检查线程在 /api/health 通后置 true，前端据此决定是否可调工具。
+struct SidecarState {
+    child: Mutex<Option<Child>>,
+    ready: AtomicBool,
+}
+
+const SIDECAR_URL: &str = "http://127.0.0.1:8000";
+const SIDECAR_PORT: u16 = 8000;
+
+/// 查找 pi（PATH + npm 全局目录）
+fn find_pi() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let candidates: Vec<&str> = if cfg!(windows) {
+        vec!["pi.cmd", "pi.exe", "pi.bat", "pi"]
+    } else {
+        vec!["pi"]
+    };
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in path_var.split(if cfg!(windows) { ';' } else { ':' }) {
+            for cand in &candidates {
+                let full = PathBuf::from(dir).join(cand);
+                if full.is_file() {
+                    return Some(full);
+                }
+            }
+        }
+    }
+    if cfg!(windows) {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let npm_dir = PathBuf::from(&appdata).join("npm");
+            for cand in &["pi.cmd", "pi.exe", "pi.ps1", "pi"] {
+                let full = npm_dir.join(cand);
+                if full.is_file() {
+                    return Some(full);
+                }
+            }
+        }
+        if let Ok(userprofile) = std::env::var("USERPROFILE") {
+            let npm_dir = PathBuf::from(&userprofile)
+                .join("AppData").join("Roaming").join("npm");
+            for cand in &["pi.cmd", "pi.exe", "pi.ps1", "pi"] {
+                let full = npm_dir.join(cand);
+                if full.is_file() {
+                    return Some(full);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 收集所有候选的 session 存储根目录（已存在且去重）。
+///
+/// Pi 官方文档说会话存于 `~/.pi/agent/sessions/`，但不同版本/包名可能用不同路径
+/// （如 `@cargo-cult/pi-coding-agent` 早期用 `~/.pi/sessions/` 或 XDG 路径）。
+/// 这里枚举所有可能的位置，扫描时全部尝试，避免因路径不一致而扫不到历史会话。
+fn get_session_roots() -> Vec<std::path::PathBuf> {
+    let mut roots = Vec::new();
+    let mut push = |p: std::path::PathBuf| {
+        if p.is_dir() && !roots.contains(&p) {
+            roots.push(p);
+        }
+    };
+    // 1. 环境变量优先
+    if let Ok(dir) = std::env::var("PI_SESSION_DIR") {
+        push(std::path::PathBuf::from(dir));
+    }
+    // 2. 官方文档路径
+    if let Some(home) = dirs::home_dir() {
+        push(home.join(".pi").join("agent").join("sessions"));
+        // 3. 旧版/变体路径
+        push(home.join(".pi").join("sessions"));
+    }
+    roots
+}
+
+/// 从 Pi 当前 sessionFile 绝对路径反推会话根目录（权威）。
+///
+/// Pi 把会话按工作目录分子目录存放：
+///   <root>/<--encoded-cwd-->/<timestamp>_<uuid>.jsonl
+/// 因此 sessionFile 的祖父目录就是包含所有 --cwd-- 子目录的根。
+/// 这是最可靠的来源——Pi 自己说当前会话在这，同级目录必有其它历史会话。
+fn root_from_session_file(session_file: &str) -> Option<std::path::PathBuf> {
+    let p = std::path::Path::new(session_file);
+    // p.parent() = <root>/<--cwd--> ；再 parent() = <root>
+    let root = p.parent()?.parent()?;
+    if root.is_dir() { Some(root.to_path_buf()) } else { None }
+}
+
+/// ~/.pi/agent （skills / extensions / prompts 等配置根）
+fn get_agent_dir() -> Option<std::path::PathBuf> {
+    dirs::home_dir().map(|h| h.join(".pi").join("agent"))
+}
+
+/// 校验 path 规范化后位于 allow_roots 之一下（防路径穿越，如 ../../etc/passwd）。
+/// 要求路径已存在（read/delete 都针对已存在文件）。
+fn ensure_within(path: &str, allow_roots: &[std::path::PathBuf]) -> Result<std::path::PathBuf, String> {
+    let target = std::fs::canonicalize(path).map_err(|e| format!("路径无效：{e}"))?;
+    for root in allow_roots {
+        // root 可能尚不存在（如刚装的扩展目录），只对存在的 root 做 canonicalize
+        if let Ok(root_c) = std::fs::canonicalize(root) {
+            if target.starts_with(&root_c) {
+                return Ok(target);
+            }
+        }
+    }
+    Err("路径不在允许范围内（仅允许 ~/.pi/agent 下）".into())
+}
+
+/// 从 jsonl 会话文件读取第一条含文本的 user 消息，用作显示标题。
+///
+/// 会话文件每行是一个 entry。message entry 形如：
+///   {"type":"message","id":"...","message":{"role":"user","content":"..." | [{type:"text",text}]}}
+/// 注意 role/content 在 `message` 字段内（见 pi.dev session-format 文档）。
+/// 遍历所有 user message，跳过纯 tool_result（无文本）的，取第一条有文本的。
+/// 跳过命令类消息（以 / 开头）避免标题是斜杠命令。
+fn first_user_text_from_session(path: &std::path::Path) -> String {
+    let f = match std::fs::File::open(path) { Ok(f) => f, Err(_) => return String::new() };
+    for line in std::io::BufRead::lines(std::io::BufReader::new(f)) {
+        let line = match line { Ok(l) => l, Err(_) => continue };
+        if line.trim().is_empty() { continue; }
+        let v: serde_json::Value = match serde_json::from_str(&line) { Ok(v) => v, Err(_) => continue };
+        // 只处理 message entry
+        if v.get("type").and_then(|t| t.as_str()) != Some("message") { continue; }
+        let msg = match v.get("message") { Some(m) => m, None => continue };
+        if msg.get("role").and_then(|r| r.as_str()) != Some("user") { continue; }
+        // content 可能是字符串或 [{type:text,text:"..."}] 或含 tool_result 部分
+        if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
+            let t = content.trim();
+            if !t.is_empty() && !t.starts_with('/') {
+                return truncate_title(t);
+            }
+            continue;
+        }
+        if let Some(arr) = msg.get("content").and_then(|c| c.as_array()) {
+            for part in arr {
+                // 只取 text 类型，跳过 tool_result / image 等
+                if part.get("type").and_then(|t| t.as_str()) != Some("text") { continue; }
+                if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
+                    let t = t.trim();
+                    if !t.is_empty() && !t.starts_with('/') {
+                        return truncate_title(t);
+                    }
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+fn truncate_title(s: &str) -> String {
+    let s = s.trim().replace('\n', " ");
+    if s.chars().count() <= 40 { s } else { s.chars().take(40).collect::<String>() + "…" }
+}
+
+
+#[tauri::command]
+async fn start_pi(app: AppHandle, state: State<'_, PiState>) -> Result<(), String> {
+    if state.child.lock().unwrap().is_some() {
+        return Ok(());
+    }
+    let pi_path = find_pi().ok_or_else(|| {
+        let path_var = std::env::var("PATH").unwrap_or_default();
+        format!("未找到 pi。PATH={path_var}\n请确认已 npm i -g @earendil-works/pi-coding-agent")
+    })?;
+
+    let mut cmd = if cfg!(windows) && pi_path.extension().map_or(false, |e| e == "cmd" || e == "bat") {
+        let mut c = Command::new("cmd");
+        c.arg("/C").arg(&pi_path);
+        c
+    } else {
+        Command::new(&pi_path)
+    };
+
+    // Windows: 隐藏子进程控制台窗口。
+    // pi.cmd / node.exe 启动时会弹一个 cmd 黑窗（运行 `npm prefix` 等），
+    // 用户误关会导致 pi 离线。CREATE_NO_WINDOW 让子进程不分配控制台，
+    // 完全后台运行。flag 仅 Windows 有效，非 Windows 下 creation_flags 不可用。
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    // 不用 --no-session，让 pi 持久化会话
+    let mut child = cmd
+        .args(["--mode", "rpc"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("启动 pi 失败：{e}（路径：{}）", pi_path.display()))?;
+
+    let stdin = child.stdin.take().ok_or("无法获取 pi stdin")?;
+    let stdout = child.stdout.take().ok_or("无法获取 pi stdout")?;
+    let stderr = child.stderr.take();
+
+    *state.stdin.lock().unwrap() = Some(stdin);
+    *state.child.lock().unwrap() = Some(child);
+
+    // stdout reader 线程：response 路由到 channel，event emit 给前端
+    let app2 = app.clone();
+    let channels = state.response_channels.clone(); // Arc clone
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            match line {
+                Ok(text) => {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                        // response（带 id）→ 路由到 send_request 的 channel
+                        if json.get("type").and_then(|v| v.as_str()) == Some("response") {
+                            if let Some(id_val) = json.get("id").and_then(|v| v.as_u64()) {
+                                let mut map = channels.lock().unwrap();
+                                if let Some(sender) = map.remove(&id_val) {
+                                    let _ = sender.send(json.clone());
+                                    continue;
+                                }
+                            }
+                        }
+                        // event → emit 给前端
+                        let _ = app2.emit("pi-event", json);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = app2.emit("pi-event", serde_json::json!({ "type": "pi_process_exit" }));
+        // pi 进程已退出：清理所有 pending 请求的 response channel，
+        // 使等待中的 send_request 立即收到"响应通道关闭"而非等满 10s 超时。
+        if let Some(state) = app2.try_state::<PiState>() {
+            state.response_channels.lock().unwrap().clear();
+        }
+    });
+
+    // stderr reader 线程：emit 给前端用于调试
+    if let Some(stderr) = stderr {
+        let app3 = app.clone();
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                match line {
+                    Ok(text) => {
+                        if !text.is_empty() {
+                            let _ = app3.emit("pi-stderr", serde_json::json!({ "line": text }));
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+    }
+
+    Ok(())
+}
+
+/// 发送命令（不等响应）—— prompt / abort / new_session / switch_session / extension_ui_response
+#[tauri::command]
+async fn send_command(
+    state: State<'_, PiState>,
+    command: serde_json::Value,
+) -> Result<(), String> {
+    let mut line = serde_json::to_string(&command).map_err(|e| e.to_string())?;
+    line.push('\n');
+    let mut guard = state.stdin.lock().unwrap();
+    let stdin = guard.as_mut().ok_or("pi 未启动")?;
+    stdin.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+    stdin.flush().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 发送命令并等待响应 —— get_state / get_available_models / get_session_stats / get_commands
+/// 自动加 id，等匹配的 response 返回，超时 10s
+#[tauri::command]
+async fn send_request(
+    state: State<'_, PiState>,
+    command: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = state.next_request_id.fetch_add(1, Ordering::SeqCst);
+    let mut cmd = command;
+    // command 必须是 JSON 对象才能写入 id 用于响应路由；非对象直接报错，避免注册了 channel 却收不到响应而空等 10s
+    let obj = cmd.as_object_mut().ok_or_else(|| "command 必须是 JSON 对象".to_string())?;
+    obj.insert("id".into(), serde_json::json!(id));
+
+    let (tx, rx) = oneshot::channel();
+    state.response_channels.lock().unwrap().insert(id, tx);
+
+    let mut line = serde_json::to_string(&cmd).map_err(|e| e.to_string())?;
+    line.push('\n');
+    {
+        let mut guard = state.stdin.lock().unwrap();
+        let stdin = guard.as_mut().ok_or_else(|| {
+            state.response_channels.lock().unwrap().remove(&id);
+            "pi 未启动".to_string()
+        })?;
+        stdin.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+        stdin.flush().map_err(|e| e.to_string())?;
+    }
+
+    match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+        Ok(Ok(resp)) => {
+            let success = resp.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+            if !success {
+                let err = resp.get("error").and_then(|v| v.as_str()).unwrap_or("未知错误");
+                return Err(err.to_string());
+            }
+            Ok(resp.get("data").cloned().unwrap_or(serde_json::Value::Null))
+        }
+        Ok(Err(_)) => Err("响应通道关闭".into()),
+        Err(_) => {
+            state.response_channels.lock().unwrap().remove(&id);
+            Err("请求超时（10s）".into())
+        }
+    }
+}
+
+/// 扫描历史会话列表。
+///
+/// 会话根目录的确定顺序（任意命中即扫描，去重后全部扫描）：
+///   1. 前端传入的 `session_file_hint`——Pi 自己 `get_state` 返回的当前会话路径，
+///      取其祖父目录，是最权威的会话根（见 root_from_session_file）。
+///   2. PI_SESSION_DIR 环境变量。
+///   3. ~/.pi/agent/sessions（官方文档路径）。
+///   4. ~/.pi/sessions（旧版/变体路径）。
+///
+/// 之前只扫固定路径 ~/.pi/agent/sessions，若 Pi 实际写在别处就会返回空列表，
+/// 前端 setSessions([]) 把侧边栏清空，表现为"新建会话后旧会话消失"。
+#[tauri::command]
+async fn scan_sessions(session_file_hint: Option<String>) -> Result<Vec<serde_json::Value>, String> {
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    // 1. 权威来源：Pi 当前 sessionFile 的祖父目录（最优先）
+    if let Some(hint) = session_file_hint.as_deref() {
+        if let Some(root) = root_from_session_file(hint) {
+            if !roots.contains(&root) { roots.push(root); }
+        }
+    }
+    // 2. 候选路径
+    for r in get_session_roots() {
+        if !roots.contains(&r) { roots.push(r); }
+    }
+
+    if roots.is_empty() {
+        // 没有任何候选目录存在——返回空列表而非报错（首次使用、尚未产生会话时正常）
+        return Ok(Vec::new());
+    }
+
+    let mut sessions: Vec<serde_json::Value> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for root in &roots {
+        collect_sessions(root, &mut sessions, &mut seen, 0)?;
+    }
+    sessions.sort_by(|a, b| {
+        b.get("mtime").and_then(|v| v.as_u64()).unwrap_or(0)
+            .cmp(&a.get("mtime").and_then(|v| v.as_u64()).unwrap_or(0))
+    });
+    Ok(sessions)
+}
+
+/// 递归收集 dir 下的 .jsonl 会话文件（限制深度 4 防意外深递归）。
+/// `seen` 用于跨多个根目录扫描时按绝对路径去重，避免同一会话被列出两次。
+fn collect_sessions(
+    dir: &std::path::Path,
+    out: &mut Vec<serde_json::Value>,
+    seen: &mut std::collections::HashSet<String>,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > 4 { return Ok(()); }
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("读取目录失败：{e}"))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let meta = match entry.metadata() { Ok(m) => m, Err(_) => continue };
+        if meta.is_dir() {
+            // 递归进入工作目录子目录（如 --home-user-project--）
+            collect_sessions(&path, out, seen, depth + 1)?;
+            continue;
+        }
+        // Pi 会话文件扩展名为 .jsonl（官方格式）；个别旧版变体可能用 .json，
+        // 但 ~/.pi 下 .json 多为配置文件，故只认 .jsonl 避免误收。
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let full_path = path.to_string_lossy().to_string();
+        if !seen.insert(full_path.clone()) { continue; } // 跨根目录去重
+        let mtime = meta.modified().ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs()).unwrap_or(0);
+        let size = meta.len();
+        let filename = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        // 工作目录（父目录名形如 --<encoded-cwd>--，解码回可读路径用于展示）
+        let cwd = path.parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            .map(|s| decode_cwd_dir(s))
+            .unwrap_or_default();
+        // 取首条用户消息作为显示标题（无标题会话的友好回退）
+        let title = first_user_text_from_session(&path);
+        out.push(serde_json::json!({
+            "path": full_path, "name": filename, "mtime": mtime, "size": size,
+            "title": title, "cwd": cwd,
+        }));
+    }
+    Ok(())
+}
+
+/// 把 Pi 的工作目录子目录名解码回可读路径。
+/// Pi 把 cwd 的 `/` 替换为 `-`，形如 --home-user-project--。
+fn decode_cwd_dir(name: &str) -> String {
+    let s = name.trim_start_matches("--").trim_end_matches("--");
+    if s.is_empty() { return String::new(); }
+    s.replace('-', "/")
+}
+
+/// 删除一个会话文件（仅允许已知 session 根目录下的 .jsonl）
+#[tauri::command]
+async fn delete_session(path: String) -> Result<(), String> {
+    let roots = get_session_roots();
+    if roots.is_empty() {
+        return Err("找不到任何 session 目录".into());
+    }
+    let target = ensure_within(&path, &roots)?;
+    if target.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+        return Err("仅允许删除 .jsonl 会话文件".into());
+    }
+    std::fs::remove_file(&target).map_err(|e| format!("删除失败：{e}"))
+}
+
+/// 检测 API Key 环境变量是否已配置
+#[tauri::command]
+async fn check_env_keys() -> Result<Vec<serde_json::Value>, String> {
+    let providers = [
+        ("Anthropic", "ANTHROPIC_API_KEY"),
+        ("OpenAI", "OPENAI_API_KEY"),
+        ("DeepSeek", "DEEPSEEK_API_KEY"),
+        ("Google", "GOOGLE_API_KEY"),
+        ("Gemini", "GEMINI_API_KEY"),
+        ("OpenRouter", "OPENROUTER_API_KEY"),
+        ("Mistral", "MISTRAL_API_KEY"),
+        ("Groq", "GROQ_API_KEY"),
+        ("Azure OpenAI", "AZURE_OPENAI_API_KEY"),
+    ];
+    let result = providers.iter().map(|(name, env)| {
+        let configured = std::env::var(env).map(|v| !v.is_empty()).unwrap_or(false);
+        serde_json::json!({ "provider": name, "env": env, "configured": configured })
+    }).collect();
+    Ok(result)
+}
+
+/// 读取指定 .jsonl 会话文件历史，返回 messages 数组（格式与 get_messages 一致）。
+/// 用于「预览模式」：浏览历史会话不切换 Pi 活动会话，不打断当前输出。
+/// 每行是 entry，提取 type=="message" 的 entry.message 字段。
+#[tauri::command]
+async fn read_session_history(path: String) -> Result<serde_json::Value, String> {
+    // 用所有候选会话根目录做白名单校验（与 scan_sessions 一致），
+    // 避免只认单一根导致其它候选目录下的会话读不到。
+    let roots = get_session_roots();
+    if roots.is_empty() {
+        return Err("找不到 session 目录".into());
+    }
+    let target = ensure_within(&path, &roots)?;
+    if target.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+        return Err("仅允许读取 .jsonl 会话文件".into());
+    }
+    let f = std::fs::File::open(&target).map_err(|e| format!("打开会话文件失败：{e}"))?;
+    let mut messages = Vec::new();
+    for line in std::io::BufRead::lines(std::io::BufReader::new(f)) {
+        let line = match line { Ok(l) => l, Err(_) => continue };
+        if line.trim().is_empty() { continue; }
+        let v: serde_json::Value = match serde_json::from_str(&line) { Ok(v) => v, Err(_) => continue };
+        if v.get("type").and_then(|t| t.as_str()) == Some("message") {
+            if let Some(msg) = v.get("message") {
+                messages.push(msg.clone());
+            }
+        }
+    }
+    Ok(serde_json::json!({ "messages": messages }))
+}
+
+/// 把 path 规范化为绝对路径：相对路径基于 ~/.pi/agent 解析，绝对路径原样返回。
+fn resolve_under_agent(path: &str) -> Result<std::path::PathBuf, String> {
+    let agent = get_agent_dir().ok_or("找不到 agent 目录")?;
+    let p = std::path::Path::new(path);
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        agent.join(p)
+    };
+    Ok(abs)
+}
+
+/// 读取文本文件内容（用于查看 skill md / 扩展源码 / 编辑系统提示词；仅允许 ~/.pi/agent 下）
+/// path 可以是绝对路径，也可以是相对 ~/.pi/agent 的相对路径（如 "SYSTEM.md"、"skills/foo.md"）。
+#[tauri::command]
+async fn read_text_file(path: String) -> Result<String, String> {
+    let agent = get_agent_dir().ok_or("找不到 agent 目录")?;
+    let roots = vec![
+        agent.join("skills"),
+        agent.join("extensions"),
+        agent.join("prompts"),
+        agent.clone(),
+    ];
+    let abs = resolve_under_agent(&path)?;
+    let target = ensure_within(abs.to_str().ok_or("路径含非 UTF-8 字符")?, &roots)?;
+    let is_md = target.extension().and_then(|e| e.to_str()).map_or(false, |e| e.eq_ignore_ascii_case("md"));
+    let in_agent_root = target.parent().map(|p| p == agent.as_path()).unwrap_or(false);
+    if in_agent_root && !is_md {
+        return Err("agent 根目录仅允许读写 .md 文件".into());
+    }
+    std::fs::read_to_string(&target).map_err(|e| format!("读取失败：{e}"))
+}
+
+/// 写入文本文件内容（用于保存系统提示词等 .md 编辑；仅允许 ~/.pi/agent 下 .md）
+/// path 可以是绝对路径，或相对 ~/.pi/agent 的相对路径（如 "SYSTEM.md"）。
+#[tauri::command]
+async fn write_text_file(path: String, content: String) -> Result<(), String> {
+    let agent = get_agent_dir().ok_or("找不到 agent 目录")?;
+    let abs = resolve_under_agent(&path)?;
+    let is_md = abs.extension().and_then(|e| e.to_str()).map_or(false, |e| e.eq_ignore_ascii_case("md"));
+    if !is_md {
+        return Err("仅允许写入 .md 文件".into());
+    }
+    // 校验父目录位于 agent 根下（父目录必须存在，防路径穿越）。
+    let parent = abs.parent().ok_or_else(|| "路径无父目录".to_string())?;
+    let parent_c = std::fs::canonicalize(parent).map_err(|e| format!("父目录无效：{e}"))?;
+    let agent_c = std::fs::canonicalize(&agent).map_err(|e| format!("agent 目录无效：{e}"))?;
+    if !parent_c.starts_with(&agent_c) {
+        return Err("路径不在 ~/.pi/agent 下".into());
+    }
+    std::fs::write(&abs, content).map_err(|e| format!("写入失败：{e}"))
+}
+
+#[tauri::command]
+async fn stop_pi(state: State<'_, PiState>) -> Result<(), String> {
+    if let Some(mut child) = state.child.lock().unwrap().take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    *state.stdin.lock().unwrap() = None;
+    state.response_channels.lock().unwrap().clear();
+    Ok(())
+}
+
+// ============================ Python 工具 sidecar ============================
+
+/// 定位 Python sidecar 的工作目录与启动方式。
+///
+/// 解析顺序（先命中先用）：
+///   1. 打包后 resource_dir 下的 `python-sidecar/ht-sidecar[.exe]`（PyInstaller 单文件）
+///   2. 开发模式：仓库根的 `python-sidecar/` 目录 + 系统 python
+/// 两者都失败返回 Err，调用方据此降级（前端提示用户手动启动 sidecar）。
+fn resolve_sidecar(resource_dir: Option<&std::path::Path>) -> Result<(Command, std::path::PathBuf), String> {
+    // 1. 打包后：resource_dir/python-sidecar/ht-sidecar(.exe)
+    if let Some(rd) = resource_dir {
+        let ps_dir = rd.join("python-sidecar");
+        let exe_name = if cfg!(windows) { "ht-sidecar.exe" } else { "ht-sidecar" };
+        let exe = ps_dir.join(exe_name);
+        if exe.is_file() {
+            let mut cmd = Command::new(&exe);
+            cmd.current_dir(&ps_dir);
+            return Ok((cmd, ps_dir));
+        }
+    }
+
+    // 2. 开发模式：相对可执行文件/工作目录的 ../python-sidecar 或 ../../python-sidecar
+    //    Tauri dev 跑在 tauri-app/src-tauri/，python-sidecar 在仓库根。
+    let candidates: Vec<std::path::PathBuf> = if let Some(rd) = resource_dir {
+        // resource_dir 在 dev 模式等于 src-tauri，向上找
+        vec![rd.join("..").join("..").join("python-sidecar").canonicalize().unwrap_or_default(),
+             rd.join("..").join("python-sidecar").canonicalize().unwrap_or_default()]
+    } else {
+        vec![std::path::PathBuf::from("../python-sidecar").canonicalize().unwrap_or_default(),
+             std::path::PathBuf::from("python-sidecar").canonicalize().unwrap_or_default()]
+    };
+    for ps_dir in candidates {
+        if !ps_dir.is_dir() { continue; }
+        if ps_dir.join("main.py").is_file() {
+            // 找系统 python；Windows 上 `python` 优先，否则 `python3`
+            let py = if cfg!(windows) { "python" } else { "python3" };
+            let mut cmd = Command::new(py);
+            cmd.arg("main.py");
+            cmd.current_dir(&ps_dir);
+            return Ok((cmd, ps_dir));
+        }
+    }
+
+    Err("未找到 python-sidecar。请先构建 PyInstaller exe，或在开发模式下从仓库根启动。".into())
+}
+
+/// 启动 Python sidecar。setup 时调用；不阻塞事件循环，后台线程轮询健康。
+fn spawn_sidecar(app: &AppHandle) {
+    let state = app.state::<SidecarState>();
+    if state.child.lock().unwrap().is_some() {
+        return; // 已启动
+    }
+
+    let resource_dir = app.path().resource_dir().ok();
+    let (mut cmd, _ps_dir) = match resolve_sidecar(resource_dir.as_deref()) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[sidecar] 定位失败：{e}");
+            let _ = app.emit("sidecar-status", serde_json::json!({
+                "ready": false, "error": format!("定位 sidecar 失败：{e}"),
+            }));
+            return;
+        }
+    };
+
+    // Windows 隐藏控制台窗（与 pi 一致，避免黑窗干扰）
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+
+    match cmd.spawn() {
+        Ok(child) => {
+            *state.child.lock().unwrap() = Some(child);
+        }
+        Err(e) => {
+            eprintln!("[sidecar] 启动失败：{e}");
+            let _ = app.emit("sidecar-status", serde_json::json!({
+                "ready": false, "error": format!("启动 sidecar 失败：{e}"),
+            }));
+            return;
+        }
+    }
+
+    // 后台线程轮询端口：连上 127.0.0.1:8000 即认为就绪，emit sidecar-status。
+    // 用 TcpStream 而非 HTTP 客户端，避免引入 reqwest 依赖；端口能连上 = uvicorn 已起。
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        let addr = format!("127.0.0.1:{SIDECAR_PORT}");
+        for _ in 0..30 { // 最多等 ~15s（30 × 500ms）
+            if std::net::TcpStream::connect(&addr).is_ok() {
+                if let Some(state) = app2.try_state::<SidecarState>() {
+                    state.ready.store(true, Ordering::SeqCst);
+                }
+                let _ = app2.emit("sidecar-status", serde_json::json!({ "ready": true, "url": SIDECAR_URL }));
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        let _ = app2.emit("sidecar-status", serde_json::json!({
+            "ready": false, "error": "sidecar 启动后 15s 内未监听端口",
+        }));
+    });
+}
+
+#[tauri::command]
+async fn sidecar_url() -> Result<String, String> {
+    Ok(SIDECAR_URL.to_string())
+}
+
+#[tauri::command]
+async fn sidecar_status(state: State<'_, SidecarState>) -> Result<serde_json::Value, String> {
+    let running = state.child.lock().unwrap().is_some();
+    let ready = state.ready.load(Ordering::SeqCst);
+    Ok(serde_json::json!({ "running": running, "ready": ready, "url": SIDECAR_URL }))
+}
+
+#[tauri::command]
+async fn stop_sidecar(state: State<'_, SidecarState>) -> Result<(), String> {
+    if let Some(mut child) = state.child.lock().unwrap().take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    state.ready.store(false, Ordering::SeqCst);
+    Ok(())
+}
+
+fn main() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_log::Builder::new().build())
+        .manage(PiState {
+            stdin: Mutex::new(None),
+            child: Mutex::new(None),
+            response_channels: Arc::new(Mutex::new(HashMap::new())),
+            next_request_id: AtomicU64::new(1),
+        })
+        .manage(SidecarState {
+            child: Mutex::new(None),
+            ready: AtomicBool::new(false),
+        })
+        .invoke_handler(tauri::generate_handler![
+            start_pi, stop_pi, send_command, send_request, scan_sessions, delete_session, check_env_keys, read_text_file, write_text_file, read_session_history,
+            sidecar_url, sidecar_status, stop_sidecar
+        ])
+        .setup(|app| {
+            // 启动 Python 工具 sidecar（不阻塞，后台轮询健康后 emit sidecar-status）
+            spawn_sidecar(app.handle());
+            #[cfg(debug_assertions)]
+            {
+                if let Some(win) = app.get_webview_window("main") {
+                    win.open_devtools();
+                }
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // 窗口关闭时清理 sidecar，避免 uvicorn 残留进程
+            if let WindowEvent::CloseRequested { .. } = event {
+                if let Some(state) = window.app_handle().try_state::<SidecarState>() {
+                    if let Some(mut child) = state.child.lock().unwrap().take() {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                }
+            }
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

@@ -1,0 +1,24 @@
+# ============ Python sidecar ============
+python-sidecar/__pycache__/
+python-sidecar/**/*.pyc
+python-sidecar/.venv/
+python-sidecar/venv/
+python-sidecar/build/
+python-sidecar/dist/
+python-sidecar/*.egg-info/
+
+# Tauri / Node
+tauri-app/node_modules/
+tauri-app/dist/
+tauri-app/src-tauri/target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 本地环境变量
+.env
+.env.local
