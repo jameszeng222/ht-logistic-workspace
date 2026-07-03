@@ -19,11 +19,15 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 $MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
 $MIRROR_HOST = "pypi.tuna.tsinghua.edu.cn"
 
-# ============ Find a working Python 3.10+ ============
+# ============ Find a working Python 3.10+ (prefer 3.11/3.12, skip 3.13+ dev builds) ============
 # Windows often ships a Store "App Execution Alias" stub as `python` that does
 # nothing in non-interactive shells (returns empty version). Skip it and prefer
-# the `py` launcher, then scan known install locations. Returns python.exe path
-# or $null.
+# the `py` launcher, then scan known install locations.
+#
+# We prefer 3.11 / 3.12 because 3.13+ (especially 3.14 dev builds like
+# pythoncore-3.14 from the Store) often lack prebuilt wheels for packages
+# like pandas / numpy / pdfplumber, and source builds fail on Windows without
+# C++ build tools. 3.13+ is only used as last resort with a warning.
 function Find-Python {
     $candidates = @()
     $py = Get-Command py -ErrorAction SilentlyContinue
@@ -44,13 +48,30 @@ function Find-Python {
         Get-ChildItem -Path $root -Filter "python.exe" -Recurse -ErrorAction SilentlyContinue -Depth 1 |
             ForEach-Object { $candidates += $_.FullName }
     }
+    # Deduplicate
+    $candidates = $candidates | Select-Object -Unique
+    # Categorize by minor version: prefer 3.11/3.12, then 3.10, 3.13+ last
+    $stable = @()
+    $older = @()
+    $newDev = @()
     foreach ($c in $candidates) {
         try {
             $ver = & $c --version 2>&1
             if ($ver -match "Python 3\.(\d+)") {
-                if ([int]$Matches[1] -ge 10) { return $c }
+                $minor = [int]$Matches[1]
+                if ($minor -ge 11 -and $minor -le 12) { $stable += $c }
+                elseif ($minor -eq 10) { $older += $c }
+                elseif ($minor -ge 13) { $newDev += $c }
             }
         } catch {}
+    }
+    if ($stable.Count -gt 0) { return $stable[0] }
+    if ($older.Count -gt 0)  { return $older[0] }
+    if ($newDev.Count -gt 0) {
+        Write-Host "WARN: only Python 3.13+ found (dev/preview build)." -ForegroundColor Yellow
+        Write-Host "      Many packages may lack prebuilt wheels. Install may fail." -ForegroundColor Yellow
+        Write-Host "      Recommend installing Python 3.11 or 3.12 from python.org." -ForegroundColor Yellow
+        return $newDev[0]
     }
     return $null
 }
@@ -107,19 +128,39 @@ Write-Host "OK: pip upgraded" -ForegroundColor Green
 
 # ============ 5. Install requirements ============
 Write-Host "[5/5] Installing requirements.txt ..." -ForegroundColor Yellow
-$null = pip install -r requirements.txt -i $MIRROR --trusted-host $MIRROR_HOST 2>&1
+$logPath = Join-Path (Resolve-Path .) "pip-install.log"
+$firstFailed = $false
+& pip install -r requirements.txt -i $MIRROR --trusted-host $MIRROR_HOST *> $logPath
 if ($LASTEXITCODE -ne 0) {
+    $firstFailed = $true
     Write-Host "Install failed with Tsinghua mirror, trying Aliyun ..." -ForegroundColor Yellow
     $MIRROR = "https://mirrors.aliyun.com/pypi/simple/"
     $MIRROR_HOST = "mirrors.aliyun.com"
     $null = python -m pip config set global.index-url $MIRROR 2>&1
     $null = python -m pip config set global.trusted-host $MIRROR_HOST 2>&1
-    $null = pip install -r requirements.txt -i $MIRROR --trusted-host $MIRROR_HOST 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: install failed. Check network and retry manually." -ForegroundColor Red
-        $ErrorActionPreference = $prevEAP
-        exit 1
-    }
+    & pip install -r requirements.txt -i $MIRROR --trusted-host $MIRROR_HOST *> $logPath
+}
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "ERROR: pip install failed with both mirrors." -ForegroundColor Red
+    Write-Host "Possible cause: your Python version ($(& python --version 2>$null)) may be too new" -ForegroundColor Red
+    Write-Host "(you have Python 3.13+/3.14+ dev builds). Many packages do not yet have" -ForegroundColor Red
+    Write-Host "prebuilt wheels for 3.13+/3.14+, and source builds fail on Windows without" -ForegroundColor Red
+    Write-Host "a C compiler (Build Tools for Visual Studio)." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Full pip log: $logPath" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Fix options (choose one):" -ForegroundColor White
+    Write-Host "  A. Install a stable Python 3.11 or 3.12 (recommended)" -ForegroundColor White
+    Write-Host "     - Download from https://www.python.org/downloads/release/" -ForegroundColor White
+    Write-Host "     - Check 'Add python.exe to PATH' during install" -ForegroundColor White
+    Write-Host "     - Delete .venv folder, reopen PowerShell, re-run deploy.ps1" -ForegroundColor White
+    Write-Host "  B. Install Build Tools for Visual Studio (C++ build tools)" -ForegroundColor White
+    Write-Host "     so packages can compile from source" -ForegroundColor White
+    Write-Host "  C. Run: Get-Content $logPath -Tail 50" -ForegroundColor White
+    Write-Host "     to see the exact error, then send it to me" -ForegroundColor White
+    $ErrorActionPreference = $prevEAP
+    exit 1
 }
 Write-Host "OK: requirements installed" -ForegroundColor Green
 
