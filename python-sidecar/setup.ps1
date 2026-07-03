@@ -91,28 +91,33 @@ Write-Host "[2/5] Activating venv ..." -ForegroundColor Yellow
 Write-Host "OK: activated" -ForegroundColor Green
 
 # ============ 3. Configure pip mirror ============
+# pip/python 往 stderr 写警告（deprecation、进度等），ErrorActionPreference=Stop
+# 时会触发 NativeCommandError 终止脚本。pip 调用期间临时放宽为 Continue。
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 Write-Host "[3/5] Configuring pip mirror (Tsinghua) ..." -ForegroundColor Yellow
-python -m pip config set global.index-url $MIRROR
-python -m pip config set global.trusted-host $MIRROR_HOST
+$null = python -m pip config set global.index-url $MIRROR 2>&1
+$null = python -m pip config set global.trusted-host $MIRROR_HOST 2>&1
 Write-Host "OK: mirror configured (current user only)" -ForegroundColor Green
 
 # ============ 4. Upgrade pip ============
 Write-Host "[4/5] Upgrading pip ..." -ForegroundColor Yellow
-python -m pip install --upgrade pip -i $MIRROR --trusted-host $MIRROR_HOST
+$null = python -m pip install --upgrade pip -i $MIRROR --trusted-host $MIRROR_HOST 2>&1
 Write-Host "OK: pip upgraded" -ForegroundColor Green
 
 # ============ 5. Install requirements ============
 Write-Host "[5/5] Installing requirements.txt ..." -ForegroundColor Yellow
-pip install -r requirements.txt -i $MIRROR --trusted-host $MIRROR_HOST
+$null = pip install -r requirements.txt -i $MIRROR --trusted-host $MIRROR_HOST 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Install failed with Tsinghua mirror, trying Aliyun ..." -ForegroundColor Yellow
     $MIRROR = "https://mirrors.aliyun.com/pypi/simple/"
     $MIRROR_HOST = "mirrors.aliyun.com"
-    python -m pip config set global.index-url $MIRROR
-    python -m pip config set global.trusted-host $MIRROR_HOST
-    pip install -r requirements.txt -i $MIRROR --trusted-host $MIRROR_HOST
+    $null = python -m pip config set global.index-url $MIRROR 2>&1
+    $null = python -m pip config set global.trusted-host $MIRROR_HOST 2>&1
+    $null = pip install -r requirements.txt -i $MIRROR --trusted-host $MIRROR_HOST 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: install failed. Check network and retry manually." -ForegroundColor Red
+        $ErrorActionPreference = $prevEAP
         exit 1
     }
 }
@@ -120,12 +125,13 @@ Write-Host "OK: requirements installed" -ForegroundColor Green
 
 # ============ 6. Install pyinstaller (for packaging) ============
 Write-Host "[+] Installing pyinstaller (for packaging ht-sidecar.exe) ..." -ForegroundColor Yellow
-pip install pyinstaller -i $MIRROR --trusted-host $MIRROR_HOST
+$null = pip install pyinstaller -i $MIRROR --trusted-host $MIRROR_HOST 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "WARN: pyinstaller install failed, handle later when packaging" -ForegroundColor Yellow
 } else {
     Write-Host "OK: pyinstaller installed" -ForegroundColor Green
 }
+$ErrorActionPreference = $prevEAP
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan

@@ -81,13 +81,20 @@ if (-not (Test-Path $pkgJson)) {
 
 # ============ 4. Install deps IN target dir ============
 Write-Host "[4/6] Installing deps in target dir ..." -ForegroundColor Yellow
+# npm 往 stderr 写 deprecation 警告（如 prebuild-install deprecated），
+# PowerShell 在 ErrorActionPreference=Stop 时会把原生命令的 stderr 当作
+# NativeCommandError 终止错误，即使 2>$null 也压不住。npm 调用期间临时
+# 放宽为 Continue，警告只显示不中断，用 $LASTEXITCODE 判断真实成败。
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 Push-Location $extDir
 try {
     # pdf-parse is pure JS — always install (required for parse_pdf tool).
     Write-Host "  Installing pdf-parse (pure JS, required) ..." -ForegroundColor Gray
-    npm install pdf-parse@^1.1.1
+    $null = npm install pdf-parse@^1.1.1 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: pdf-parse install failed (network?)." -ForegroundColor Red
+        $ErrorActionPreference = $prevEAP
         exit 1
     }
     Write-Host "  OK: pdf-parse installed" -ForegroundColor Green
@@ -99,14 +106,17 @@ try {
     # (task/note/query_database) are auto-disabled via feature detection in
     # all-in-one.ts. Core logistic tools are unaffected.
     Write-Host "  Installing better-sqlite3 (native, optional) ..." -ForegroundColor Gray
-    npm install better-sqlite3@^11.3.0 2>$null
+    $null = npm install better-sqlite3@^11.3.0 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  WARN: better-sqlite3 install failed (needs Python + VS Build Tools to" -ForegroundColor Yellow
         Write-Host "        compile). Skipping — SQLite tools will be disabled, logistic tools OK." -ForegroundColor Yellow
     } else {
         Write-Host "  OK: better-sqlite3 installed" -ForegroundColor Green
     }
-} finally { Pop-Location }
+} finally {
+    $ErrorActionPreference = $prevEAP
+    Pop-Location
+}
 
 # ============ 5. Deploy agent config (SYSTEM.md + skills/) ============
 Write-Host "[5/6] Deploying agent config (SYSTEM.md + skills/) ..." -ForegroundColor Yellow
