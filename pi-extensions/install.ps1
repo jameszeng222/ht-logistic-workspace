@@ -10,7 +10,9 @@
 #   4. Install native deps (better-sqlite3, pdf-parse) IN the target dir
 #      (Pi loads extension from ~/.pi/agent/extensions/, so node_modules
 #       must live there, not in the source repo)
-#   5. Print verification steps
+#   5. Deploy pi-agent-config (SYSTEM.md + skills/) to ~/.pi/agent/
+#      (SYSTEM.md defines permission tiers; skills/ define per-domain workflows)
+#   6. Print verification steps
 #
 # Why a dedicated installer:
 #   Pi 用 jiti 加载 ~/.pi/agent/extensions/all-in-one.ts，Node 模块查找从
@@ -88,8 +90,34 @@ try {
 } finally { Pop-Location }
 Write-Host "OK: deps installed" -ForegroundColor Green
 
-# ============ 5. Verify ============
-Write-Host "[5/5] Verifying ..." -ForegroundColor Yellow
+# ============ 5. Deploy agent config (SYSTEM.md + skills/) ============
+Write-Host "[5/6] Deploying agent config (SYSTEM.md + skills/) ..." -ForegroundColor Yellow
+$agentConfigDir = Join-Path $PSScriptRoot "..\pi-agent-config"
+if (Test-Path $agentConfigDir) {
+    # SYSTEM.md -> ~/.pi/agent/SYSTEM.md
+    $systemMd = Join-Path $agentConfigDir "SYSTEM.md"
+    if (Test-Path $systemMd) {
+        Copy-Item -Path $systemMd -Destination (Join-Path $piAgentDir "SYSTEM.md") -Force
+        Write-Host "  OK: SYSTEM.md deployed" -ForegroundColor Green
+    }
+    # skills/ -> ~/.pi/agent/skills/
+    $skillsSrc = Join-Path $agentConfigDir "skills"
+    $skillsDst = Join-Path $piAgentDir "skills"
+    if (Test-Path $skillsSrc) {
+        if (-not (Test-Path $skillsDst)) {
+            New-Item -ItemType Directory -Path $skillsDst -Force | Out-Null
+        }
+        Get-ChildItem -Path $skillsSrc -Filter "*.md" | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination (Join-Path $skillsDst $_.Name) -Force
+        }
+        Write-Host "  OK: skills/ deployed ($(@(Get-ChildItem -Path $skillsSrc -Filter '*.md')).Count files)" -ForegroundColor Green
+    }
+} else {
+    Write-Host "  SKIP: pi-agent-config/ not found (skipping config deploy)" -ForegroundColor Yellow
+}
+
+# ============ 6. Verify ============
+Write-Host "[6/6] Verifying ..." -ForegroundColor Yellow
 $installedTs = Join-Path $extDir "all-in-one.ts"
 $nodeModules = Join-Path $extDir "node_modules"
 $bsql = Join-Path $nodeModules "better-sqlite3"
@@ -116,12 +144,15 @@ Write-Host ""
 Write-Host "Installed to: $extDir" -ForegroundColor White
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor White
-Write-Host "  1. Restart Pi (or Tauri app) so it reloads the extension" -ForegroundColor White
+Write-Host "  1. Restart Pi (or Tauri app) so it reloads extension + SYSTEM.md + skills" -ForegroundColor White
 Write-Host "  2. In Pi, ask: 'list the tools you can call'" -ForegroundColor White
 Write-Host "     You should see logistic_* tools (invoice_packing, customs_generator," -ForegroundColor White
 Write-Host "     customs_extractor, data_analysis, list_tools)" -ForegroundColor White
 Write-Host "  3. Try: 'analyze C:\path\to\data.xlsx'" -ForegroundColor White
-Write-Host "     Pi should call logistic_data_analysis autonomously" -ForegroundColor White
+Write-Host "     Pi should call logistic_data_analysis directly (no asking permission)" -ForegroundColor White
+Write-Host "  4. Permission mode: toggle in Tauri Settings > 工具权限模式" -ForegroundColor White
+Write-Host "     - Standard: only delete/external-write/script executions prompt" -ForegroundColor White
+Write-Host "     - Full Trust: all tool calls auto-approved, zero interruption" -ForegroundColor White
 Write-Host ""
 Write-Host "Note: Make sure Tauri app is running so the Python sidecar (port 8000)" -ForegroundColor Gray
 Write-Host "      is up — logistic_* tools call it over HTTP." -ForegroundColor Gray

@@ -1144,13 +1144,29 @@ export default function App() {
 
             {/* 工具权限 */}
             <div className="settings-section">
-              <div className="settings-section-title">工具权限</div>
-              <div className="setting-row">
+              <div className="settings-section-title">工具权限模式</div>
+              <div className="setting-row" style={{ alignItems: "flex-start", flexDirection: "column", gap: "var(--space-2)" }}>
                 <div>
-                  <div className="setting-label">自动确认工具调用</div>
-                  <div className="setting-desc">Pi 请求确认时自动允许，不弹窗。关闭则每次弹窗确认。</div>
+                  <div className="setting-label">权限模式</div>
+                  <div className="setting-desc">控制 AI 助手调用工具时的确认行为。无论哪种模式，AI 都不再每个动作前口头征求同意。</div>
                 </div>
-                <div className={`toggle ${autoConfirm ? "on" : ""}`} onClick={() => toggleAutoConfirm(!autoConfirm)} />
+                <div style={{ display: "flex", gap: "var(--space-2)" }}>
+                  <button
+                    className={`btn-primary ${!autoConfirm ? "" : "btn-secondary"}`}
+                    style={{ opacity: autoConfirm ? 0.6 : 1 }}
+                    onClick={() => toggleAutoConfirm(false)}
+                  >标准模式</button>
+                  <button
+                    className={`btn-primary ${autoConfirm ? "" : "btn-secondary"}`}
+                    style={{ opacity: autoConfirm ? 1 : 0.6 }}
+                    onClick={() => toggleAutoConfirm(true)}
+                  >完全信任</button>
+                </div>
+                <div className="setting-desc" style={{ fontSize: "0.85em" }}>
+                  {autoConfirm
+                    ? "✓ 完全信任：所有工具调用自动放行，零打断（包括删除/外部写/脚本）。最快但有风险。"
+                    : "✓ 标准模式：只读/生成类工具直接执行；删除任务/外部写请求/执行脚本这三类不可逆操作仍弹窗确认。"}
+                </div>
               </div>
             </div>
 
