@@ -18,7 +18,7 @@ interface ToolDef {
   description: string;
   endpoint: string;
   input: "excel" | "pdf";
-  output: "zip" | "excel";
+  output: "zip" | "excel" | "json";
 }
 
 interface SidecarStatus {
@@ -36,11 +36,13 @@ const INPUT_FILTERS: Record<ToolDef["input"], { name: string; extensions: string
 const OUTPUT_FILTERS: Record<ToolDef["output"], { name: string; extensions: string[] }[]> = {
   zip: [{ name: "ZIP", extensions: ["zip"] }],
   excel: [{ name: "Excel", extensions: ["xlsx"] }],
+  json: [{ name: "JSON", extensions: ["json"] }],
 };
 
 const OUTPUT_DEFAULT_NAME: Record<ToolDef["output"], string> = {
   zip: "result.zip",
   excel: "result.xlsx",
+  json: "result.json",
 };
 
 export function ToolsPanel() {
@@ -54,6 +56,7 @@ export function ToolsPanel() {
   const [filePath, setFilePath] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [savedPath, setSavedPath] = useState<string | null>(null);
+  const [jsonResult, setJsonResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // ============ 加载工具列表 + 监听 sidecar 状态 ============
@@ -101,6 +104,7 @@ export function ToolsPanel() {
     if (!activeTool) return;
     setError(null);
     setSavedPath(null);
+    setJsonResult(null);
     try {
       const selected = await openDialog({
         multiple: false,
@@ -120,6 +124,7 @@ export function ToolsPanel() {
     setRunning(true);
     setError(null);
     setSavedPath(null);
+    setJsonResult(null);
     try {
       // 用 fetch 读本地文件为 Blob 再上传（Tauri webview 支持读取 file:// 协议）
       // 若 fetch file:// 失败，降级提示用户
@@ -149,24 +154,28 @@ export function ToolsPanel() {
         } catch {}
         throw new Error(msg);
       }
-      const resultBlob = await resp.blob();
 
-      // 弹保存对话框让用户选保存位置
-      const defaultName = `${activeTool.id}-${new Date().toISOString().slice(0, 10)}.${OUTPUT_DEFAULT_NAME[activeTool.output].split(".")[1]}`;
-      const savePath = await saveDialog({
-        defaultPath: defaultName,
-        filters: OUTPUT_FILTERS[activeTool.output],
-      });
-      if (!savePath) {
-        // 用户取消保存，把结果暂存到 blob URL 供后续重试
-        setError("已取消保存。请重新执行工具并选择保存位置。");
-        return;
+      if (activeTool.output === "json") {
+        // JSON 类型：直接展示，不弹保存对话框
+        const data = await resp.json();
+        setJsonResult(JSON.stringify(data, null, 2));
+      } else {
+        // 文件类型：弹保存对话框 → 写盘
+        const resultBlob = await resp.blob();
+        const defaultName = `${activeTool.id}-${new Date().toISOString().slice(0, 10)}.${OUTPUT_DEFAULT_NAME[activeTool.output].split(".")[1]}`;
+        const savePath = await saveDialog({
+          defaultPath: defaultName,
+          filters: OUTPUT_FILTERS[activeTool.output],
+        });
+        if (!savePath) {
+          setError("已取消保存。请重新执行工具并选择保存位置。");
+          return;
+        }
+        // 用 Tauri 写文件：通过 invoke 调 Rust 命令 write_binary_file
+        const buf = new Uint8Array(await resultBlob.arrayBuffer());
+        await invoke("write_binary_file", { path: savePath, data: Array.from(buf) });
+        setSavedPath(savePath);
       }
-
-      // 用 Tauri 写文件：通过 invoke 调 Rust 命令 write_binary_file
-      const buf = new Uint8Array(await resultBlob.arrayBuffer());
-      await invoke("write_binary_file", { path: savePath, data: Array.from(buf) });
-      setSavedPath(savePath);
     } catch (e) {
       setError(`工具执行失败：${e}`);
     } finally {
@@ -198,7 +207,7 @@ export function ToolsPanel() {
             <button
               key={t.id}
               className={`tool-card ${activeTool?.id === t.id ? "active" : ""}`}
-              onClick={() => { setActiveTool(t); setFilePath(null); setSavedPath(null); setError(null); }}
+              onClick={() => { setActiveTool(t); setFilePath(null); setSavedPath(null); setJsonResult(null); setError(null); }}
             >
               <div className="tool-card-name">{t.name}</div>
               <div className="tool-card-desc">{t.description}</div>
@@ -249,7 +258,7 @@ export function ToolsPanel() {
                 {filePath && (
                   <button
                     className="btn-secondary"
-                    onClick={() => { setFilePath(null); setSavedPath(null); setError(null); }}
+                    onClick={() => { setFilePath(null); setSavedPath(null); setJsonResult(null); setError(null); }}
                   >清除</button>
                 )}
               </div>
@@ -262,7 +271,7 @@ export function ToolsPanel() {
                 </div>
               )}
 
-              {/* 成功结果 */}
+              {/* 成功结果：文件类型 */}
               {savedPath && (
                 <div className="tool-result">
                   <div className="tool-result-label">✓ 完成 — 结果已保存：</div>
@@ -271,6 +280,14 @@ export function ToolsPanel() {
                     className="btn-secondary"
                     onClick={() => invoke("open_in_explorer", { path: savedPath })}
                   >在文件夹中显示</button>
+                </div>
+              )}
+
+              {/* 成功结果：JSON 类型（直接展示） */}
+              {jsonResult && (
+                <div className="tool-result">
+                  <div className="tool-result-label">✓ 完成 — 分析结果：</div>
+                  <pre className="tool-result-json">{jsonResult}</pre>
                 </div>
               )}
             </>

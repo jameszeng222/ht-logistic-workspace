@@ -21,7 +21,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
-from tools import invoice_packing, customs_generator, customs_extractor
+from tools import invoice_packing, customs_generator, customs_extractor, data_analysis
 
 
 app = FastAPI(title="HT Logistic Workspace — Tools")
@@ -65,6 +65,14 @@ async def list_tools():
             "endpoint": "/api/tools/customs-extractor",
             "input": "pdf",
             "output": "excel",
+        },
+        {
+            "id": "data-analysis",
+            "name": "Excel 数据分析",
+            "description": "上传 Excel/CSV，自动按列类型统计（数值/分类/时间）+ 相关性 + 直方图",
+            "endpoint": "/api/tools/data-analysis",
+            "input": "excel",
+            "output": "json",
         },
     ]}
 
@@ -139,6 +147,20 @@ async def extract_customs(file: UploadFile = File(...)):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=customs-extracted.xlsx"},
     )
+
+
+@app.post("/api/tools/data-analysis")
+async def analyze_data(file: UploadFile = File(...)):
+    """Excel 数据分析：上传 Excel/CSV → 返回 JSON 统计报告。
+
+    不返回文件，直接返回结构化 JSON，前端展示，AI 可解读。
+    """
+    content = await file.read()
+    try:
+        result = data_analysis.analyze_excel_data(content, file.filename or "upload.xlsx")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"分析失败：{e}")
+    return result
 
 
 if __name__ == "__main__":

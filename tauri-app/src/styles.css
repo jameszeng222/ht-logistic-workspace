@@ -1393,3 +1393,16 @@ body {
   background: var(--surface);
   border-radius: var(--radius-sm);
 }
+.tool-result-json {
+  font-size: var(--text-xs);
+  color: var(--fg);
+  font-family: var(--font-mono, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  padding: var(--space-3);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  max-height: 500px;
+  overflow-y: auto;
+}
