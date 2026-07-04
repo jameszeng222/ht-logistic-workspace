@@ -100,6 +100,11 @@ export default function App() {
   const [envKeys, setEnvKeys] = useState<{provider: string; env: string; configured: boolean}[]>([]);
   const [autoConfirm, setAutoConfirm] = useState(() => localStorage.getItem("pi-auto-confirm") === "true");
   const [showExtManager, setShowExtManager] = useState(false);
+  // 会话分组折叠状态（key=项目名，value=是否展开）
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("pi-collapsed-projects") || "[]")); }
+    catch { return new Set(); }
+  });
 
   // 模型配置
   const [modelConfig, setModelConfig] = useState<{
@@ -652,6 +657,17 @@ export default function App() {
     localStorage.setItem("pi-auto-confirm", String(on));
   }, []);
 
+  // 切换项目分组折叠
+  const toggleProjectCollapse = useCallback((projectName: string) => {
+    setCollapsedProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectName)) next.delete(projectName);
+      else next.add(projectName);
+      localStorage.setItem("pi-collapsed-projects", JSON.stringify([...next]));
+      return next;
+    });
+  }, []);
+
   const compactNow = useCallback(async () => {
     try {
       await rpc({ type: "compact" });
@@ -771,6 +787,7 @@ export default function App() {
     <div className="app">
       {/* ============ 顶栏 ============ */}
       <header className="header">
+        <button className="icon-btn" onClick={() => { refreshEnvKeys(); loadSystemPrompt(systemPromptPath); loadModelConfig(); setShowSettings(true); }} title="设置">☰</button>
         <div className="app-brand">
           <span className="app-brand-mark">HT</span>
           <span>Logistic Workspace</span>
@@ -780,15 +797,11 @@ export default function App() {
           {ready ? (busy ? "思考中" : "就绪") : "未连接"}
         </span>
         <div className="header-spacer" />
-        {/* 扩展管理 */}
-        <button className="icon-btn" onClick={() => setShowExtManager(true)} title="扩展管理">🧩</button>
         {/* 调试日志 */}
         <button className={`icon-btn log-toggle ${stderrCount > 0 ? "has-warn" : ""}`} onClick={() => setShowLogViewer(true)} title="调试日志">
           📋
           {logs.length > 0 && <span className="badge">{logs.length}</span>}
         </button>
-        {/* 设置按钮 */}
-        <button className="icon-btn" onClick={() => { refreshEnvKeys(); loadSystemPrompt(systemPromptPath); loadModelConfig(); setShowSettings(true); }} title="设置">⚙</button>
         {/* 新建会话 */}
         <button className="icon-btn" onClick={newSession} disabled={busy} title="新建会话">+ 新会话</button>
       </header>
@@ -797,6 +810,13 @@ export default function App() {
       <div className="body workspace-mode">
         {/* 左侧栏 */}
         <aside className="sidebar">
+          {/* 扩展管理 */}
+          <div className="sidebar-section sidebar-ext-section">
+            <div className="sidebar-section-header">
+              <span className="sidebar-title">扩展与技能</span>
+              <button className="sidebar-new-btn" onClick={() => setShowExtManager(true)} title="管理扩展和技能">管理</button>
+            </div>
+          </div>
           {/* 会话列表 */}
           <div className="sidebar-section" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
             <div className="sidebar-section-header">
@@ -820,15 +840,18 @@ export default function App() {
                 <div style={{ padding: "12px 8px", fontSize: 12, color: "var(--fg-muted)" }}>
                   {sessions.length === 0 ? "暂无历史会话" : "无匹配会话"}
                 </div>
-              ) : projectSessions.map(([projectName, groupSessions]) => (
+              ) : projectSessions.map(([projectName, groupSessions]) => {
+                const collapsed = collapsedProjects.has(projectName);
+                return (
                 <div key={projectName} className="session-group">
-                  <div className="session-group-header">
-                    <span className="session-group-icon">📁</span>
+                  <div className="session-group-header" onClick={() => toggleProjectCollapse(projectName)} style={{ cursor: "pointer" }}>
+                    <span className="session-group-icon">{collapsed ? "▸" : "▾"}</span>
                     <span className="session-group-title" title={projectName}>
                       {projectName}
                     </span>
                     <span className="session-group-count">{groupSessions.length}</span>
                   </div>
+                  {!collapsed && (
                   <div className="session-group-items">
                     {groupSessions.map((s) => {
                       const isActive = currentSessionPath === s.path;
@@ -874,8 +897,10 @@ export default function App() {
                       );
                     })}
                   </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -885,7 +910,6 @@ export default function App() {
               <div className="sidebar-section-header"><span className="sidebar-title">当前会话操作</span></div>
               <div className="session-ops">
                 <button className="session-op-btn" onClick={startRename} disabled={busy}>✎ 重命名</button>
-                <button className="session-op-btn" onClick={cloneSession} disabled={busy}>⧉ 克隆</button>
               </div>
             </div>
           )}

@@ -7,7 +7,7 @@
 //
 // 后端：python-sidecar/main.py（FastAPI on 127.0.0.1:8000）
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -71,6 +71,8 @@ export function ToolsPanel({ onSendToAssistant }: ToolsPanelProps) {
   const [savedPath, setSavedPath] = useState<string | null>(null);
   const [jsonResult, setJsonResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 「让助手解读」去重：同一工具+同一输入+同一结果 10 秒内只发一次
+  const lastReviewRef = useRef<{ key: string; time: number }>({ key: "", time: 0 });
 
   const visibleTools = useMemo(() => {
     const daily = tools.filter((t) => DAILY_TOOL_IDS.has(t.id));
@@ -79,6 +81,14 @@ export function ToolsPanel({ onSendToAssistant }: ToolsPanelProps) {
 
   const askAssistantToReview = useCallback(() => {
     if (!activeTool || !onSendToAssistant) return;
+    // 去重：同一工具+同一输入文件+同一结果的解读请求，10 秒内只发一次
+    const reviewKey = `${activeTool.id}:${filePath || ""}:${savedPath || jsonResult?.slice(0, 100) || ""}`;
+    const now = Date.now();
+    const last = lastReviewRef.current;
+    if (last.key === reviewKey && now - last.time < 10000) {
+      return; // 10 秒内重复请求，忽略
+    }
+    lastReviewRef.current = { key: reviewKey, time: now };
     const inputLine = filePath ? `输入文件：${filePath}` : "没有记录输入文件。";
     const resultLine = savedPath
       ? `输出文件：${savedPath}`

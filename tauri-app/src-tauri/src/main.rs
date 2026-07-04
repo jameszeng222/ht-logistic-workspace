@@ -434,11 +434,36 @@ fn collect_sessions(
 }
 
 /// 把 Pi 的工作目录子目录名解码回可读路径。
-/// Pi 把 cwd 的 `/` 替换为 `-`，形如 --home-user-project--。
+/// Pi 把 cwd 的路径分隔符（/ 或 \）替换为 `-`，形如 --home-user-project--。
+/// 但目录名本身也可能含 `-`（如 ht-logistic-workspace），无法无损还原。
+/// 策略：尝试解码并在文件系统上验证；若解码后的路径不存在，保留原始字符串（仅去掉 -- 包裹），
+/// 避免把 ht-logistic-workspace 错误拆成 ht/logistic/workspace。
 fn decode_cwd_dir(name: &str) -> String {
     let s = name.trim_start_matches("--").trim_end_matches("--");
     if s.is_empty() { return String::new(); }
-    s.replace('-', "/")
+    // 尝试把 - 替换为 / 后验证路径是否存在
+    let decoded = s.replace('-', "/");
+    // Windows 盘符特殊处理：C/Users/... → C:\Users\...
+    let candidate = if decoded.len() >= 2 && decoded.as_bytes()[1] == b':' {
+        let mut c = decoded.clone();
+        c.replace_range(1..2, "\\");
+        c.replace('/', "\\");
+        c
+    } else {
+        decoded
+    };
+    // 如果解码后的路径存在，用解码结果；否则保留原始（只去 -- 包裹），避免误拆含 - 的目录名
+    if std::path::Path::new(&candidate).exists() {
+        candidate
+    } else {
+        // 再试 Unix 风格 / 前缀
+        let unix_candidate = format!("/{}", s.replace('-', "/"));
+        if std::path::Path::new(&unix_candidate).exists() {
+            return unix_candidate;
+        }
+        // 都不存在，返回原始（仅去 -- 包裹），保证不误拆
+        s.to_string()
+    }
 }
 
 /// 删除一个会话文件（仅允许已知 session 根目录下的 .jsonl）

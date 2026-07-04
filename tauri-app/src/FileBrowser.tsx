@@ -310,7 +310,7 @@ export function FileBrowser({ currentCwd, compact = false }: FileBrowserProps) {
           <div className="fb-empty">空目录</div>
         ) : (
           <>
-            {/* 表头 */}
+            {/* 表头（非 compact 模式才显示）*/}
             {!compact && <div className="fb-list-header">
               <span className="fb-col-name">名称</span>
               <span className="fb-col-size">大小</span>
@@ -328,8 +328,8 @@ export function FileBrowser({ currentCwd, compact = false }: FileBrowserProps) {
                   <span className="fb-entry-icon">{entry.is_dir ? "📁" : getFileIcon(entry.name)}</span>
                   <span className="fb-entry-name">{entry.name}</span>
                 </span>
-                <span className="fb-col-size">{formatSize(entry.size)}</span>
-                <span className="fb-col-modified">{formatDate(entry.modified)}</span>
+                {!compact && <span className="fb-col-size">{formatSize(entry.size)}</span>}
+                {!compact && <span className="fb-col-modified">{formatDate(entry.modified)}</span>}
                 <span className="fb-col-actions" onClick={(e) => e.stopPropagation()}>
                   {!entry.is_dir && (
                     <button

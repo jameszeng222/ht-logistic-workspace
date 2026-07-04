@@ -194,7 +194,7 @@ body {
   align-items: center;
   gap: var(--space-2);
   padding: 0 var(--space-3);
-  background: var(--bg-elevated);
+  background: var(--bg);
   border-bottom: 0;
   -webkit-app-region: drag;
   backdrop-filter: saturate(1.4);
@@ -323,7 +323,7 @@ body {
 
 /* ============ 侧栏 ============ */
 .sidebar {
-  background: var(--bg-elevated);
+  background: var(--bg);
   border-right: 0;
   display: flex; flex-direction: column; overflow: hidden;
 }
@@ -360,8 +360,10 @@ body {
   text-transform: none;
   font-weight: 600;
   letter-spacing: 0.02em;
+  user-select: none;
 }
-.session-group-icon { font-size: 12px; }
+.session-group-header:hover { color: var(--fg); }
+.session-group-icon { font-size: 10px; width: 14px; text-align: center; flex-shrink: 0; }
 .session-group-title {
   flex: 1;
   overflow: hidden;
@@ -490,7 +492,7 @@ body {
 .workspace-files {
   min-width: 0;
   overflow: hidden;
-  background: var(--bg-elevated);
+  background: var(--bg);
   border-left: 0;
   display: flex;
 }
@@ -541,19 +543,6 @@ body {
   font-size: var(--text-md);
   max-width: 620px;
   margin: 0 auto;
-}
-.examples { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: center; max-width: 560px; }
-.example-chip {
-  background: var(--surface); border: 1px solid var(--border);
-  color: var(--fg-muted);
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-full); cursor: pointer;
-  font-size: var(--text-sm); font-family: var(--font-sans);
-  transition: all var(--dur) var(--ease);
-}
-.example-chip:hover {
-  background: var(--surface-hover); border-color: var(--primary); color: var(--primary);
-  transform: translateY(-1px); box-shadow: var(--shadow-sm);
 }
 
 /* Turn */
