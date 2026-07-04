@@ -520,17 +520,56 @@ export default function App() {
     // Pi 扩展确认弹窗：method="confirm", title=自定义, message=自定义
     if (ev.method === "confirm" || ev.method === "select") {
       const mode = localStorage.getItem("pi-permission-mode") || "workspace";
-      // 拼接 title + message 做关键字判断（中文 + 英文）
-      const text = `${ev.title || ""} ${ev.message || ""}`.toLowerCase();
-      // 破坏性操作关键字：删除/移除/清空/卸载/格式化/覆盖 + delete/remove/rm/drop/truncate/uninstall/overwrite
+      const text = `${ev.title || ""} ${ev.message || ""}`;
+      const lower = text.toLowerCase();
+
+      // ===== tool-name 白名单分级（替代纯关键字猜测）=====
+      // Pi 权限弹窗 message 通常含 "tool 'xxx'" 或 "tool \"xxx\""，正则提取 tool name
+      const toolNameMatch = text.match(/tool\s+['"]([a-zA-Z0-9_\-]+)['"]/);
+      const toolName = toolNameMatch ? toolNameMatch[1].toLowerCase() : "";
+
+      // 安全只读工具白名单：自动放行，任何模式下都不弹窗
+      const SAFE_TOOLS = new Set([
+        "read", "read_file", "readfile", "cat", "head", "tail", "more", "less",
+        "ls", "list", "list_dir", "listdir", "dir", "tree",
+        "glob", "find", "ffind", "ffls", "ffgrep", "ffcat", "ffread",
+        "grep", "rg", "search", "ffsearch",
+        "stat", "view", "show", "check", "info",
+        "kb_search", "chart_render",
+      ]);
+      // 写入/修改类工具：始终弹窗（即便 workspace 模式也不自动放行）
+      const WRITE_TOOLS = new Set([
+        "write", "write_file", "writefile", "edit", "edit_file", "patch", "apply_patch",
+        "mkdir", "mkdirs", "rm", "remove", "delete", "del", "rmdir", "unlink",
+        "mv", "move", "rename", "copy", "cp",
+        "bash", "sh", "shell", "exec", "execute", "run", "run_script", "python", "node", "powershell", "cmd",
+        "http_request", "http", "fetch", "curl", "wget",
+        "query_database", "insert", "update", "drop", "truncate",
+      ]);
+      // 本地物流工具白名单：自动放行（调用本地 sidecar，可控）
+      const LOGISTIC_TOOL_PREFIX = "logistic_";
+
+      const isLogistic = toolName.startsWith(LOGISTIC_TOOL_PREFIX);
+      const isSafe = SAFE_TOOLS.has(toolName);
+      const isWrite = WRITE_TOOLS.has(toolName);
+
+      // 兜底：破坏性操作关键字（tool name 未识别时用）
       const destructiveKeywords = ["删除", "移除", "清空", "卸载", "格式化", "覆盖", "delete", "remove", "rm ", "drop ", "truncate", "uninstall", "overwrite", "rmdir", "del "];
-      const isDestructive = destructiveKeywords.some((k) => text.includes(k));
-      // 安全只读工具关键字（Pi 内置工具权限弹窗常见）：
-      //   find/ls/cat/grep/glob/read/read_file/list/list_dir/search/view/show/check/stat
-      //   以及 ffgrep/ffind/ffls/ffcat/ffread 等扩展工具
-      const safeKeywords = ["读取", "查看", "列表", "查询", "搜索", "检查", "显示", "获取", "read", "list", "search", "view", "show", "check", "glob", "grep", "ls ", "cat ", "head ", "tail ", "find ", "stat", "ffgrep", "ffind", "ffls", "ffcat", "ffread", "tool 'find'", "tool 'ls'", "tool 'cat'", "tool 'grep'", "tool 'glob'", "tool 'read'", "tool 'list'", "tool 'search'", "tool 'view'", "tool 'show'", "tool 'check'", "tool 'stat'", "tool 'head'", "tool 'tail'"];
-      const isSafe = safeKeywords.some((k) => text.includes(k));
-      addLog("event", `${ev.method}_recv · mode=${mode} · destructive=${isDestructive} · safe=${isSafe} · title="${ev.title || ""}" · msg="${(ev.message || "").slice(0, 80)}"`);
+      const isDestructive = destructiveKeywords.some((k) => lower.includes(k));
+
+      // HTTP 非 GET 判断（tool='http_request' 且 message 含 POST/PUT/DELETE 等）
+      const httpMethodMatch = text.match(/method\s*[:=]\s*['"]?(GET|POST|PUT|DELETE|PATCH)['"]?/i);
+      const isHttpNonGet = toolName === "http_request" || toolName === "http" || toolName === "fetch" || toolName === "curl";
+      const isHttpDestructive = isHttpNonGet && httpMethodMatch && httpMethodMatch[1].toUpperCase() !== "GET";
+
+      // 分级结论
+      // safeTool: 只读工具或物流白名单 → 自动放行（任何模式）
+      // needsConfirm: 写入工具 / 破坏性关键字 / HTTP 非 GET → 弹窗
+      // unknown: tool name 未识别，按模式策略决定
+      const isAutoApprove = isSafe || isLogistic;
+      const isNeedsConfirm = isWrite || isDestructive || isHttpDestructive;
+
+      addLog("event", `${ev.method}_recv · mode=${mode} · tool=${toolName || "?"} · safe=${isSafe} · write=${isWrite} · logistic=${isLogistic} · destructive=${isDestructive} · httpNonGet=${isHttpDestructive} · title="${ev.title || ""}" · msg="${(ev.message || "").slice(0, 80)}"`);
       const autoApprove = (reason: string) => {
         // select 类型回复 {value: 选项}；confirm 类型回复 {confirmed:true}
         // Pi 权限弹窗的 options 通常是 ["Allow","Deny"] 或 ["允许","拒绝"]，取第一个 Allow 类选项
@@ -554,16 +593,23 @@ export default function App() {
         autoApprove("全信任");
         return;
       }
-      if (mode === "workspace" && !isDestructive) {
-        // 工作台：非破坏性操作自动放行，破坏性操作仍弹窗
-        autoApprove("工作台非破坏");
+      // safe tool / logistic 白名单：任何非 trust 模式下也自动放行（只读安全）
+      if (isAutoApprove && !isNeedsConfirm) {
+        autoApprove(isSafe ? `只读工具(${toolName})` : `物流工具(${toolName})`);
         return;
       }
-      if (mode === "cautious" && isSafe && !isDestructive) {
-        // 审慎：安全的只读操作也自动放行，只有写/修改/破坏性操作弹窗
-        autoApprove("审慎只读");
+      // 明确需要确认的（写/破坏/HTTP非GET）：workspace 和 cautious 都弹窗
+      if (isNeedsConfirm) {
+        setUiRequest({ ev, inputValue: "", selectIndex: 0 });
         return;
       }
+      // workspace 模式下未识别 tool name：默认放行（保持原体验），但记录日志便于排查
+      if (mode === "workspace") {
+        autoApprove("工作台未识别tool默认放行");
+        return;
+      }
+      // cautious 模式下未识别 tool name：弹窗（保守）
+      // setUiRequest 在下方统一处理
     }
     setUiRequest({ ev, inputValue: "", selectIndex: 0 });
   }, [addLog]);
@@ -838,6 +884,19 @@ export default function App() {
     toast(`已加入附件：${fileName}（可直接发送）`, "success");
   }, [toast]);
 
+  // ====== 从文件浏览器一键执行工具 ======
+  // 点击"单据"/"数据"按钮：把文件路径塞给 ToolsPanel（incomingFile），
+  // ToolsPanel useEffect 会自动切换工具 + 填入 filePath。
+  // source 用时间戳保证每次点击都触发（即使同文件也能重新填入）。
+  const [pendingToolFile, setPendingToolFile] = useState<{ path: string; source: string } | null>(null);
+  const runToolFromBrowser = useCallback((path: string, toolKind: "invoice" | "data") => {
+    const trimmed = path.trim();
+    if (!trimmed) return;
+    const fileName = trimmed.split(/[\\/]/).pop() || trimmed;
+    setPendingToolFile({ path: trimmed, source: `${Date.now()}-${toolKind}` });
+    toast(`已加载到工具区：${fileName}（${toolKind === "invoice" ? "单据制作" : "数据分析"}）`, "success");
+  }, [toast]);
+
   // ====== 工作目录设定 ======
   // 持久化到 localStorage；applyWorkdir 会重启 pi 进程使新 cwd 生效。
   const setWorkdirPersist = useCallback((dir: string) => {
@@ -849,8 +908,21 @@ export default function App() {
     // 去掉末尾路径分隔符，避免 split(/[\\/]/).pop() 返回空字符串
     const trimmed = dir.trim().replace(/[\\/]+$/, "");
     if (busy) { toast("请等待当前任务完成再切换工作目录", "info"); return; }
+    // 前端预校验：路径不存在直接报错，不重启 pi（后端 restart_pi 也会校验，双重保险）
+    if (trimmed) {
+      try {
+        const exists = await invoke<boolean>("path_exists", { path: trimmed });
+        if (!exists) {
+          toast(`工作目录不存在：${trimmed}`, "error");
+          return;
+        }
+      } catch (e) {
+        toast(`校验工作目录失败: ${e}`, "error");
+        return;
+      }
+    }
+    setReady(false);
     try {
-      setReady(false);
       // 重启 pi 并传入新 cwd；sessionPath=null 表示新建/沿用默认会话
       await invoke("restart_pi", { cwd: trimmed || null, sessionPath: null });
       setWorkdirPersist(trimmed);
@@ -864,8 +936,18 @@ export default function App() {
       // 重启后 pi 可能自动加载了某个会话，读取其历史确保 UI 与 pi 实际上下文一致
       await loadHistory();
     } catch (e) {
-      setReady(true);
-      toast(`切换工作目录失败: ${e}`, "error");
+      // restart_pi 失败：旧 pi 已被 stop，必须重新拉起原 pi（用旧 workdir），
+      // 否则界面虽然 setReady(false) 但 pi 实际离线。
+      setReady(false);
+      toast(`切换工作目录失败: ${e}（正在恢复原 Pi）`, "error");
+      try {
+        await invoke("restart_pi", { cwd: workdirRef.current.trim() || null, sessionPath: null });
+        setReady(true);
+        await refreshState();
+        await loadHistory();
+      } catch (e2) {
+        toast(`恢复 Pi 失败: ${e2}`, "error");
+      }
     }
   }, [busy, toast, setWorkdirPersist, refreshState, refreshSessions, loadHistory]);
   const pickWorkdir = useCallback(async () => {
@@ -889,7 +971,8 @@ export default function App() {
 
   const send = async (text?: string) => {
     const rawMsg = (text ?? input).trim();
-    if (!rawMsg) return;
+    // 支持只发附件：文本为空但有附件时，用默认文案发送
+    if (!rawMsg && attachments.length === 0) return;
     if (busy) { toast("物流助理思考中，请等待当前任务完成或中断后再发送", "info"); return; }
     if (!ready) { toast("物流助理未连接，请稍候", "info"); return; }
     // 预览模式下若 pi 正忙，提示用户：续聊需要重启 pi 会中断当前输出
@@ -931,18 +1014,20 @@ export default function App() {
       //       语义混淆，已移除。如需清空请用 /new 新建会话。
     }
     // 拼接附件路径到消息（Pi 可读取这些路径的文件内容）
-    let finalMsg = rawMsg;
+    // 文本为空但有附件时，用默认文案让 AI 知道用户意图是分析附件
+    const userText = rawMsg || "请分析这些附件文件。";
+    let finalMsg = userText;
     if (attachments.length > 0) {
       const attachList = attachments.map((p) => {
         const name = p.split(/[\\/]/).pop() || p;
         return `- ${p}（${name}）`;
       }).join("\n");
-      finalMsg = `${rawMsg}\n\n附件文件：\n${attachList}`;
+      finalMsg = `${userText}\n\n附件文件：\n${attachList}`;
     }
     const turnId = `turn-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
     currentTurnId.current = turnId; currentMsgId.current = null;
     pendingTextRef.current.clear(); pendingThinkingRef.current.clear();
-    setTurns((prev) => [...prev, { id: turnId, userMessage: rawMsg, assistantMsgs: [], toolCalls: {}, status: "streaming" }]);
+    setTurns((prev) => [...prev, { id: turnId, userMessage: userText, assistantMsgs: [], toolCalls: {}, status: "streaming" }]);
     setInput(""); setAttachments([]); setAutoFollow(true);
     try {
       await invoke("send_command", { command: { type: "prompt", message: finalMsg } });
@@ -1410,11 +1495,16 @@ export default function App() {
             </div>
           </div>
           <section className="tool-workbench">
-            <ToolsPanel onSendToAssistant={(message) => send(message)} />
+            <ToolsPanel onSendToAssistant={(message) => send(message)} incomingFile={pendingToolFile} />
           </section>
         </main>
         <aside className="workspace-files">
-          <FileBrowser currentCwd={workdir || currentSessionCwd} compact onPickFile={pickFileFromBrowser} />
+          <FileBrowser
+            currentCwd={workdir || currentSessionCwd}
+            compact
+            onPickFile={pickFileFromBrowser}
+            onRunTool={runToolFromBrowser}
+          />
         </aside>
       </div>
 

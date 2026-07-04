@@ -226,7 +226,8 @@ async fn start_pi(app: AppHandle, state: State<'_, PiState>) -> Result<(), Strin
 /// 用指定工作目录和/或会话文件重启 pi。
 /// - `cwd`: 工作目录绝对路径，None 时不设置（沿用 Tauri 进程 cwd）。
 /// - `session_path`: 会话文件绝对路径，对应 `pi --session <path>`，用于续聊历史会话。
-/// 流程：stop 现有 pi → 用新参数 spawn → 复用 start_pi 已有的 stdout/stderr 处理逻辑。
+/// 流程：**先校验 cwd/sessionPath 是否存在，再 stop 旧 pi**，避免新参数错误导致
+/// 旧 Pi 被杀掉而新 Pi 启动失败、界面误显示"就绪"的离线状态。
 #[tauri::command]
 async fn restart_pi(
     app: AppHandle,
@@ -234,6 +235,25 @@ async fn restart_pi(
     cwd: Option<String>,
     session_path: Option<String>,
 ) -> Result<(), String> {
+    // 校验前置：任何路径无效都直接返回错误，不动旧 Pi
+    if let Some(dir) = cwd.as_deref() {
+        let p = std::path::Path::new(dir);
+        if !p.exists() {
+            return Err(format!("工作目录不存在：{dir}"));
+        }
+        if !p.is_dir() {
+            return Err(format!("工作目录不是文件夹：{dir}"));
+        }
+    }
+    if let Some(sp) = session_path.as_deref() {
+        let p = std::path::Path::new(sp);
+        if !p.exists() {
+            return Err(format!("会话文件不存在：{sp}"));
+        }
+        if !p.is_file() {
+            return Err(format!("会话路径不是文件：{sp}"));
+        }
+    }
     stop_pi_inner(state.inner());
     spawn_pi(&app, state.inner(), cwd.as_deref(), session_path.as_deref())
 }
@@ -1330,6 +1350,12 @@ async fn get_agent_paths() -> Result<serde_json::Value, String> {
     }))
 }
 
+/// 检查路径是否存在（文件或目录均可）。供前端在 restart_pi 前预校验 workdir/sessionPath。
+#[tauri::command]
+async fn path_exists(path: String) -> Result<bool, String> {
+    Ok(std::path::Path::new(&path).exists())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
@@ -1351,7 +1377,7 @@ fn main() {
             write_binary_file, open_in_explorer,
             list_extensions, install_extension, uninstall_extension,
             get_model_config, save_model_config, apply_model_config,
-            list_dir, open_file, get_agent_paths
+            list_dir, open_file, get_agent_paths, path_exists
         ])
         .setup(|app| {
             // 启动前先应用模型配置（把 API Key 注入环境变量）

@@ -53,6 +53,12 @@ function getFileIcon(name: string): string {
   return FILE_ICONS[ext] || "📄";
 }
 
+// 判断是否 Excel 文件（用于显示"单据"/"数据"工具按钮）
+function isExcelFile(name: string): boolean {
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  return ext === "xlsx" || ext === "xls";
+}
+
 function formatSize(bytes: number): string {
   if (bytes === 0) return "";
   if (bytes < 1024) return `${bytes} B`;
@@ -94,11 +100,13 @@ interface FileBrowserProps {
   compact?: boolean;
   /** 点击"分析"按钮时回调，把文件绝对路径交给聊天框作为附件 */
   onPickFile?: (path: string) => void;
+  /** 点击"单据"/"数据"按钮时回调，把文件交给工具区执行对应工具 */
+  onRunTool?: (path: string, toolKind: "invoice" | "data") => void;
 }
 
 type BrowserTab = "workspace" | "sessions";
 
-export function FileBrowser({ currentCwd, compact = false, onPickFile }: FileBrowserProps) {
+export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool }: FileBrowserProps) {
   const [tab, setTab] = useState<BrowserTab>("workspace");
   const [agentPaths, setAgentPaths] = useState<AgentPaths | null>(null);
   const [entries, setEntries] = useState<DirEntry[]>([]);
@@ -352,6 +360,21 @@ export function FileBrowser({ currentCwd, compact = false, onPickFile }: FileBro
                 {!compact && <span className="fb-col-size">{formatSize(entry.size)}</span>}
                 {!compact && <span className="fb-col-modified">{formatDate(entry.modified)}</span>}
                 <span className="fb-col-actions" onClick={(e) => e.stopPropagation()}>
+                  {/* Excel 文件：显示"单据"/"数据"按钮，直接交给工具区执行对应工具 */}
+                  {!entry.is_dir && onRunTool && isExcelFile(entry.name) && (
+                    <>
+                      <button
+                        className="fb-action-btn fb-action-tool"
+                        onClick={() => onRunTool(entry.path, "invoice")}
+                        title="用此文件执行单据制作工具"
+                      >单据</button>
+                      <button
+                        className="fb-action-btn fb-action-tool"
+                        onClick={() => onRunTool(entry.path, "data")}
+                        title="用此文件执行数据分析工具"
+                      >数据</button>
+                    </>
+                  )}
                   {!entry.is_dir && onPickFile && (
                     <button
                       className="fb-action-btn fb-action-primary"

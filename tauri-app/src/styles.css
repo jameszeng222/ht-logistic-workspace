@@ -2328,6 +2328,18 @@ body {
   border-color: var(--primary-hover);
   color: var(--fg-on-primary);
 }
+/* 工具执行按钮：区别于"分析"（聊天附件），用 success 色调暗示"执行工具" */
+.fb-action-btn.fb-action-tool {
+  background: color-mix(in oklch, var(--success) 12%, transparent);
+  border-color: color-mix(in oklch, var(--success) 30%, var(--border-subtle));
+  color: var(--success);
+  font-weight: 500;
+}
+.fb-action-btn.fb-action-tool:hover {
+  background: color-mix(in oklch, var(--success) 20%, transparent);
+  border-color: var(--success);
+  color: var(--success);
+}
 
 /* 空状态 & 错误 */
 .fb-empty {
