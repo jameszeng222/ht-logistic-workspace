@@ -340,14 +340,14 @@ export const ToolsPanel = forwardRef<ToolsPanelHandle, ToolsPanelProps>(function
               <div className="file-pick-zone" onClick={pickFile}>
                 {filePath ? (
                   <div className="file-pick-info">
-                    <div className="file-pick-icon">📄</div>
+                    <div className="file-pick-icon fb-icon-badge excel">XLS</div>
                     <div className="file-pick-name">{filePath.split(/[\\/]/).pop()}</div>
                     <div className="file-pick-path">{filePath}</div>
                     <div className="file-pick-hint">点击重新选择</div>
                   </div>
                 ) : (
                   <div className="file-pick-empty">
-                    <div className="file-pick-icon">📁</div>
+                    <div className="file-pick-icon fb-icon-badge dir">DIR</div>
                     <div>点击选择 {activeTool.input.toUpperCase()} 文件</div>
                     <div className="file-pick-accept">
                       支持：{INPUT_FILTERS[activeTool.input].map(f => f.extensions.join(", ")).join(", ")}

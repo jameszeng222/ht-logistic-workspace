@@ -1159,7 +1159,7 @@ export default function App() {
           }}
           title={workdir ? `工作目录：${workdir}（点击切换）` : "设置工作目录（输入输出文件都存这里）"}
         >
-          📁 {workdir ? (workdir.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || workdir) : "设置工作目录"}
+          {workdir ? (workdir.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || workdir) : "设置工作目录"}
         </button>
         {/* 主题切换 */}
         <button
@@ -1192,10 +1192,8 @@ export default function App() {
       <div className="body workspace-mode">
         {/* 左侧栏 */}
         <aside className="sidebar">
-          {/* 会话列表（顶部，最重要）*/}
-          {/* 会话列表：高度自适应内容（不再 flex:1 撑满），让下方"物流工具"上移
-              与中间工具执行区顶部大致对齐；列表自身滚动 */}
-          <div className="sidebar-section" style={{ flex: "0 1 auto", display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+          {/* 会话列表：flex:1 撑满上半部分，把"物流工具"推到中间偏下位置 */}
+          <div className="sidebar-section" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
             <div className="sidebar-section-header">
               <span className="sidebar-title">历史会话</span>
               <button className="sidebar-new-btn" onClick={newSession} disabled={busy}>+ 新建</button>
@@ -1304,23 +1302,23 @@ export default function App() {
             </div>
           </div>
 
-          {/* sidebar 底部状态条（2 行）：
-              第 1 行：状态点 + 状态文字
-              第 2 行：模型 · 权限 · 上下文%
-              下方全宽细进度条 */}
+          {/* sidebar 底部状态条（2 行 + 进度条），固定在侧栏底部：
+              第 1 行：状态点 + 状态文字 · 模型名
+              第 2 行：权限模式 · 上下文%
+              末行：全宽上下文进度条 */}
           <div className="sidebar-footer-bar">
-            <div className="sidebar-footer-row1" title={permissionModeLabel}>
+            <div className="sidebar-footer-row1" title={`模型：${currentModel?.name ?? "未连接"}`}>
               <span className={`sidebar-footer-dot ${ready ? (busy ? "busy" : "ready") : "error"}`} />
               <span className="sidebar-footer-state">{ready ? (busy ? "思考中" : "空闲") : "未连接"}</span>
-            </div>
-            <div className="sidebar-footer-row2" title={`模型：${currentModel?.name ?? "未连接"}`}>
-              <span className="sidebar-footer-model">{currentModel?.name ?? "—"}</span>
               <span className="sidebar-footer-sep">·</span>
-              <span className="sidebar-footer-perm">{permissionMode === "cautious" ? "审慎" : permissionMode === "workspace" ? "工作台" : "信任"}</span>
+              <span className="sidebar-footer-model">{currentModel?.name ?? "—"}</span>
+            </div>
+            <div className="sidebar-footer-row2" title={permissionModeLabel}>
+              <span className="sidebar-footer-perm">{permissionMode === "cautious" ? "审慎模式" : permissionMode === "workspace" ? "工作台模式" : "全信任模式"}</span>
               {contextPercent > 0 && (
                 <>
                   <span className="sidebar-footer-sep">·</span>
-                  <span className="sidebar-footer-pct">{contextPercent.toFixed(0)}%</span>
+                  <span className="sidebar-footer-pct">上下文 {contextPercent.toFixed(0)}%</span>
                 </>
               )}
             </div>
@@ -1426,7 +1424,7 @@ export default function App() {
                   {attachments.map((path) => {
                     const name = path.split(/[\\/]/).pop() || path;
                     const ext = name.split(".").pop()?.toLowerCase() || "";
-                    const icon = ["xlsx", "xls", "csv"].includes(ext) ? "📊" : ["doc", "docx"].includes(ext) ? "📝" : ext === "pdf" ? "📄" : ["png", "jpg", "jpeg"].includes(ext) ? "🖼️" : "📎";
+                    const icon = ["xlsx", "xls", "csv"].includes(ext) ? <span className="fb-icon-badge excel">XLS</span> : ["doc", "docx"].includes(ext) ? <span className="fb-icon-badge doc">DOC</span> : ext === "pdf" ? <span className="fb-icon-badge doc">PDF</span> : ["png", "jpg", "jpeg"].includes(ext) ? <span className="fb-icon-badge img">IMG</span> : <span className="fb-icon-badge text">FILE</span>;
                     return (
                       <div key={path} className="attachment-chip" title={path}>
                         <span className="attachment-icon">{icon}</span>

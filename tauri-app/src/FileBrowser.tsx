@@ -24,34 +24,42 @@ interface AgentPaths {
   skills: string;
 }
 
-// 文件扩展名 → 图标
-const FILE_ICONS: Record<string, string> = {
-  json: "📋",
-  jsonl: "📋",
-  md: "📝",
-  txt: "📄",
-  rs: "🦀",
-  ts: "🔷",
-  tsx: "⚛️",
-  js: "🟨",
-  jsx: "🟨",
-  py: "🐍",
-  html: "🌐",
-  css: "🎨",
-  xlsx: "📊",
-  xls: "📊",
-  pdf: "📕",
-  zip: "📦",
-  png: "🖼️",
-  jpg: "🖼️",
-  jpeg: "🖼️",
-  gif: "🖼️",
-  svg: "🖼️",
+// 文件扩展名 → 类型标签（字母徽标，灰调为主，Excel 用薄荷绿强调）
+// 返回 { label, kind }：label 是 2-3 字母缩写，kind 用于 CSS 着色
+type FileIconInfo = { label: string; kind: "excel" | "doc" | "code" | "img" | "archive" | "data" | "text" };
+
+const EXT_KIND: Record<string, FileIconInfo> = {
+  xlsx: { label: "XLS", kind: "excel" },
+  xls:  { label: "XLS", kind: "excel" },
+  csv:  { label: "CSV", kind: "excel" },
+  pdf:  { label: "PDF", kind: "doc" },
+  doc:  { label: "DOC", kind: "doc" },
+  docx: { label: "DOC", kind: "doc" },
+  md:   { label: "MD",  kind: "doc" },
+  txt:  { label: "TXT", kind: "text" },
+  json: { label: "{}",  kind: "data" },
+  jsonl:{ label: "{}",  kind: "data" },
+  rs:   { label: "RS",  kind: "code" },
+  ts:   { label: "TS",  kind: "code" },
+  tsx:  { label: "TS",  kind: "code" },
+  js:   { label: "JS",  kind: "code" },
+  jsx:  { label: "JS",  kind: "code" },
+  py:   { label: "PY",  kind: "code" },
+  html: { label: "HTML",kind: "code" },
+  css:  { label: "CSS", kind: "code" },
+  zip:  { label: "ZIP", kind: "archive" },
+  tar:  { label: "TAR", kind: "archive" },
+  gz:   { label: "GZ",  kind: "archive" },
+  png:  { label: "IMG", kind: "img" },
+  jpg:  { label: "IMG", kind: "img" },
+  jpeg: { label: "IMG", kind: "img" },
+  gif:  { label: "IMG", kind: "img" },
+  svg:  { label: "SVG", kind: "img" },
 };
 
-function getFileIcon(name: string): string {
+function getFileIcon(name: string): FileIconInfo {
   const ext = name.split(".").pop()?.toLowerCase() || "";
-  return FILE_ICONS[ext] || "📄";
+  return EXT_KIND[ext] || { label: "FILE", kind: "text" };
 }
 
 // 判断是否 Excel 文件（用于显示"单据"/"数据"工具按钮）
@@ -344,7 +352,7 @@ export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool
                     title={`${p}（右键更多操作）`}
                     onContextMenu={(e) => openCtxMenu(e, buildPathMenuItems(p))}
                   >
-                    <span className="fb-context-icon">{getFileIcon(name)}</span>
+                    {(() => { const ic = getFileIcon(name); return <span className={`fb-icon-badge ${ic.kind}`}>{ic.label}</span>; })()}
                     <span className="fb-context-name">{name}</span>
                   </div>
                 );
@@ -363,7 +371,7 @@ export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool
                     title={`${o.toolName} → ${o.path}（右键加入分析）`}
                     onContextMenu={(e) => openCtxMenu(e, buildPathMenuItems(o.path))}
                   >
-                    <span className="fb-context-icon">{getFileIcon(name)}</span>
+                    {(() => { const ic = getFileIcon(name); return <span className={`fb-icon-badge ${ic.kind}`}>{ic.label}</span>; })()}
                     <span className="fb-context-name">{name}</span>
                   </div>
                 );
@@ -377,11 +385,11 @@ export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool
         <button
           className={`fb-tab ${tab === "workspace" ? "active" : ""}`}
           onClick={() => setTab("workspace")}
-        >📁 工作目录</button>
+        >工作目录</button>
         <button
           className={`fb-tab ${tab === "sessions" ? "active" : ""}`}
           onClick={() => setTab("sessions")}
-        >💬 会话目录</button>
+        >会话目录</button>
       </div>
 
       {/* 工具栏：后退/前进/上级 + 地址栏 */}
@@ -485,7 +493,9 @@ export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool
                 title={!entry.is_dir ? `${entry.name}（双击分析 · 右键更多操作）` : entry.name}
               >
                 <span className="fb-col-name">
-                  <span className="fb-entry-icon">{entry.is_dir ? "📁" : getFileIcon(entry.name)}</span>
+                  {entry.is_dir ? (
+                    <span className="fb-icon-badge dir">DIR</span>
+                  ) : (() => { const ic = getFileIcon(entry.name); return <span className={`fb-icon-badge ${ic.kind}`}>{ic.label}</span>; })()}
                   <span className="fb-entry-name">{entry.name}</span>
                 </span>
                 {!compact && <span className="fb-col-size">{formatSize(entry.size)}</span>}

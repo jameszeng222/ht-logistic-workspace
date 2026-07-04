@@ -388,7 +388,8 @@ body {
 .sidebar-new-btn:active:not(:disabled) { transform: scale(0.95); }
 .sidebar-new-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* 物流工具导航（从中间工具区拆出，放左侧栏） */
+/* 物流工具导航（从中间工具区拆出，放左侧栏）
+   位于侧栏中间偏下；列表高度不超过工具执行区(420px) */
 .sidebar-tools-nav {
   flex-shrink: 0;
   border-top: 1px solid var(--border-subtle);
@@ -397,7 +398,7 @@ body {
 .sidebar-tools-list {
   display: flex; flex-direction: column; gap: 2px;
   padding: var(--space-1) var(--space-2);
-  max-height: 180px;
+  max-height: 200px;
   overflow-y: auto;
 }
 .sidebar-tools-empty {
@@ -438,7 +439,7 @@ body {
 }
 
 /* 会话列表 */
-.session-list { flex: 1 1 auto; overflow-y: auto; padding: var(--space-1) var(--space-2) var(--space-2); max-height: 320px; }
+.session-list { flex: 1; overflow-y: auto; padding: var(--space-1) var(--space-2) var(--space-2); }
 
 .session-group { margin-bottom: var(--space-3); }
 .session-group-header {
@@ -2477,6 +2478,36 @@ body {
 .fb-entry-icon {
   font-size: 14px;
   flex-shrink: 0;
+}
+/* 文件类型徽标：2-3 字母 + 灰调底；Excel 用薄荷绿强调；无 emoji 无黄色 */
+.fb-icon-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 28px; height: 18px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.04em;
+  font-family: var(--font-sans);
+  background: var(--surface-active);
+  color: var(--fg-subtle);
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+.fb-icon-badge.dir { background: var(--surface-active); color: var(--fg-muted); }
+.fb-icon-badge.excel {
+  background: #E6F3EF;
+  color: #1B6B5C;
+}
+.fb-icon-badge.doc { background: var(--surface-active); color: var(--fg-muted); }
+.fb-icon-badge.code { background: var(--surface-active); color: var(--fg-subtle); }
+.fb-icon-badge.img { background: var(--surface-active); color: var(--fg-subtle); }
+.fb-icon-badge.archive { background: var(--surface-active); color: var(--fg-subtle); }
+.fb-icon-badge.data { background: var(--surface-active); color: var(--fg-subtle); }
+.fb-icon-badge.text { background: var(--surface-active); color: var(--fg-subtle); }
+/* file-pick-zone 里的徽标放大一些 */
+.file-pick-icon.fb-icon-badge {
+  min-width: 36px; height: 24px;
+  font-size: 11px;
+  margin: 0 auto var(--space-2);
 }
 .fb-entry-name {
   overflow: hidden;
