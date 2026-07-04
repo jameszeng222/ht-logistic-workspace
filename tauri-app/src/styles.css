@@ -103,10 +103,10 @@
                Consolas, "Liberation Mono", monospace;
 
   /* 字号梯度 */
-  --text-xs:   11px;   /* 元信息/标签 */
-  --text-sm:   12.5px; /* 次要正文 */
-  --text-base: 14px;   /* 正文 */
-  --text-md:   15px;   /* 强调正文 */
+  --text-xs:   12px;   /* 元信息/标签 */
+  --text-sm:   13px;   /* 次要正文 */
+  --text-base: 14.5px;   /* 正文 */
+  --text-md:   15.5px;   /* 强调正文 */
   --text-lg:   17px;   /* 标题 */
   --text-xl:   21px;   /* 大标题 */
   --text-2xl:  28px;   /* 空状态 */
@@ -193,7 +193,7 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 0 var(--space-3) 0 var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-1);
   background: var(--bg);
   border-bottom: 0;
   -webkit-app-region: drag;
@@ -209,10 +209,12 @@ body {
   -webkit-app-region: no-drag;
 }
 .win-btn {
-  width: 36px; height: 28px;
+  width: 32px; height: 28px;
   display: inline-flex; align-items: center; justify-content: center;
   background: transparent; border: none; cursor: pointer;
-  color: var(--fg-muted); font-size: 12px;
+  color: var(--fg-muted); font-size: 13px;
+  font-family: var(--font-sans);
+  line-height: 1;
   border-radius: var(--radius-xs);
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
@@ -518,7 +520,7 @@ body {
 .messages { min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .messages-inner {
   max-width: var(--content-max); margin: 0 auto;
-  padding: var(--space-8) 0 var(--space-6);
+  padding: var(--space-5) 0 var(--space-6);
   display: flex; flex-direction: column; gap: var(--space-6);
 }
 
@@ -582,16 +584,17 @@ body {
   word-wrap: break-word; overflow-wrap: break-word; white-space: pre-wrap;
 }
 .user-bubble {
-  background: var(--surface);
+  background: var(--surface-hover);
   color: var(--fg);
   border: 1px solid var(--border-subtle);
   box-shadow: none;
 }
 .assistant-bubble {
-  background: var(--bubble-assistant);
+  background: transparent;
   border: 0;
   color: var(--fg);
   box-shadow: none;
+  padding: var(--space-1) 0;
 }
 .msg.assistant.streaming .assistant-bubble { border-color: var(--border-strong); }
 
@@ -617,8 +620,8 @@ body {
 
 /* 思维链折叠 */
 .reasoning {
-  background: var(--surface); border: 1px solid var(--border-subtle);
-  border-radius: var(--radius); padding: var(--space-2) var(--space-3);
+  background: transparent; border: 0;
+  border-radius: var(--radius); padding: var(--space-1) 0;
   font-size: var(--text-sm);
 }
 .reasoning summary {
@@ -628,7 +631,7 @@ body {
 .reasoning summary:hover { color: var(--fg); }
 .reasoning-body {
   margin-top: var(--space-2); padding-top: var(--space-2);
-  border-top: 1px solid var(--border-subtle);
+  border-top: 0;
   white-space: pre-wrap; color: var(--fg-muted);
   line-height: var(--leading-normal); font-size: var(--text-sm);
 }
@@ -751,6 +754,57 @@ body {
   color: var(--primary);
   background: var(--primary-soft);
   border-color: color-mix(in oklch, var(--primary) 35%, var(--border));
+}
+
+/* 模型下拉框（上拉） */
+.model-dropdown-wrap { position: relative; display: inline-flex; }
+.model-dropdown {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  min-width: 240px;
+  max-width: 320px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-1);
+  z-index: 100;
+  max-height: 320px;
+  overflow-y: auto;
+  animation: dropdown-in var(--dur) var(--ease-out);
+}
+@keyframes dropdown-in { from { transform: translateY(4px); opacity: 0; } }
+.model-dropdown-empty {
+  padding: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  text-align: center;
+}
+.model-dropdown-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease);
+}
+.model-dropdown-item:hover { background: var(--surface-hover); }
+.model-dropdown-item.active { background: var(--primary-soft); }
+.model-dropdown-item.active .model-dropdown-name { color: var(--primary); }
+.model-dropdown-name { font-size: var(--text-sm); font-weight: 500; color: var(--fg); }
+.model-dropdown-meta { font-size: var(--text-xs); color: var(--fg-muted); }
+.dropdown-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+  background: transparent;
 }
 .composer-inner {
   margin: 0 auto;

@@ -87,7 +87,7 @@ export default function App() {
   // 模型
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [currentModel, setCurrentModel] = useState<ModelInfo | null>(null);
-  const [showModelPicker, setShowModelPicker] = useState(false);
+  const [showModelDropdown, setShowModelDropdown] = useState(false);
 
   // 状态 & 统计
   const [piState, setPiState] = useState<PiState | null>(null);
@@ -99,7 +99,24 @@ export default function App() {
   const [autoCompaction, setAutoCompaction] = useState(true);
   const [autoRetry, setAutoRetry] = useState(true);
   const [envKeys, setEnvKeys] = useState<{provider: string; env: string; configured: boolean}[]>([]);
-  const [autoConfirm, setAutoConfirm] = useState(() => localStorage.getItem("pi-auto-confirm") === "true");
+  // 权限模式：cautious（审慎）/ workspace（工作台）/ trust（全信任）
+  // - cautious:   所有 confirm 都弹窗（生成文件前确认，删除/外部请求必须确认）
+  // - workspace:  只对"删除"等关键字弹窗，其余自动放行
+  // - trust:      所有 confirm 自动放行
+  const [permissionMode, setPermissionMode] = useState<"cautious" | "workspace" | "trust">(() => {
+    const saved = localStorage.getItem("pi-permission-mode");
+    if (saved === "workspace" || saved === "trust" || saved === "cautious") return saved;
+    // 兼容旧 autoConfirm=true → trust；false → cautious
+    return localStorage.getItem("pi-auto-confirm") === "true" ? "trust" : "cautious";
+  });
+  const permissionModeLabel = permissionMode === "cautious" ? "审慎模式" : permissionMode === "workspace" ? "工作台模式" : "全信任模式";
+  const cyclePermissionMode = useCallback(() => {
+    setPermissionMode((prev) => {
+      const next = prev === "cautious" ? "workspace" : prev === "workspace" ? "trust" : "cautious";
+      localStorage.setItem("pi-permission-mode", next);
+      return next;
+    });
+  }, []);
   const [showExtManager, setShowExtManager] = useState(false);
   // 会话分组折叠状态（key=项目名，value=是否展开）
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => {
@@ -473,10 +490,25 @@ export default function App() {
   const handleUiRequest = useCallback((ev: any) => {
     const fireAndForget = ["notify","setStatus","setWidget","setTitle","setWorkingMessage","setWorkingVisible","setWorkingIndicator","setFooter","setTheme","setEditorText","setEditorComponent","pasteToEditor","setToolsExpanded"];
     if (fireAndForget.includes(ev.method)) return;
-    // auto-confirm：confirm 类型自动响应（用户在设置里开启）
-    if (ev.method === "confirm" && localStorage.getItem("pi-auto-confirm") === "true") {
-      invoke("send_command", { command: { type: "extension_ui_response", id: ev.id, confirmed: true, cancelled: false } });
-      return;
+    // 权限模式处理 confirm 类型请求
+    if (ev.method === "confirm") {
+      const mode = localStorage.getItem("pi-permission-mode") || "cautious";
+      // 拼接 title + message 做关键字判断（中文 + 英文）
+      const text = `${ev.title || ""} ${ev.message || ""}`.toLowerCase();
+      // 不可逆操作关键字：删除/移除/清空/卸载/格式化/delete/remove/rm/drop/truncate/uninstall
+      const destructiveKeywords = ["删除", "移除", "清空", "卸载", "格式化", "覆盖", "delete", "remove", "rm ", "drop ", "truncate", "uninstall", "overwrite"];
+      const isDestructive = destructiveKeywords.some((k) => text.includes(k));
+      if (mode === "trust") {
+        // 全信任：所有 confirm 自动放行
+        invoke("send_command", { command: { type: "extension_ui_response", id: ev.id, confirmed: true, cancelled: false } });
+        return;
+      }
+      if (mode === "workspace" && !isDestructive) {
+        // 工作台：非破坏性操作自动放行，破坏性操作仍弹窗
+        invoke("send_command", { command: { type: "extension_ui_response", id: ev.id, confirmed: true, cancelled: false } });
+        return;
+      }
+      // cautious（审慎）：所有 confirm 都弹窗
     }
     setUiRequest({ ev, inputValue: "", selectIndex: 0 });
   }, []);
@@ -551,6 +583,17 @@ export default function App() {
     const el = logListRef.current; if (!el) return;
     if (logAutoFollow.current) el.scrollTop = el.scrollHeight;
   }, [logs.length, showLogViewer]);
+
+  // 全局 ESC：关闭命令面板 / 模型下拉（即使焦点不在 textarea 上也能生效）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (showCmdPalette) { e.preventDefault(); setShowCmdPalette(false); return; }
+      if (showModelDropdown) { e.preventDefault(); setShowModelDropdown(false); return; }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showCmdPalette, showModelDropdown]);
 
   // ====== 会话操作 ======
   const newSession = useCallback(async () => {
@@ -630,7 +673,6 @@ export default function App() {
     try {
       await rpc({ type: "set_model", provider, modelId });
       await refreshState();
-      setShowModelPicker(false);
       toast("已切换模型", "success");
     } catch (e) { toast(`切换失败: ${e}`, "error"); }
   }, [rpc, refreshState, toast]);
@@ -653,9 +695,9 @@ export default function App() {
     try { await rpc({ type: "set_auto_retry", enabled: on }); } catch {}
   }, [rpc]);
 
-  const toggleAutoConfirm = useCallback((on: boolean) => {
-    setAutoConfirm(on);
-    localStorage.setItem("pi-auto-confirm", String(on));
+  const setPermissionModePersist = useCallback((mode: "cautious" | "workspace" | "trust") => {
+    setPermissionMode(mode);
+    localStorage.setItem("pi-permission-mode", mode);
   }, []);
 
   // 切换项目分组折叠
@@ -946,7 +988,6 @@ export default function App() {
             <div className="messages-inner">
               {turns.length === 0 ? (
                 <div className="empty-state">
-                  <div className="workspace-eyebrow">HT LOGISTIC AGENT</div>
                   <h3>Logistic Workspace</h3>
                   <p>面向日常单据制作和物流数据分析的本地 AI 工作台。选择下方工具处理 Excel/PDF，或直接描述你要完成的任务。</p>
                 </div>
@@ -1031,15 +1072,42 @@ export default function App() {
               </div>
               {/* 工具栏移到输入框下方 */}
               <div className="composer-toolbar">
-                <button className="composer-pill" onClick={() => { refreshModels(); setShowModelPicker(true); }} title="切换模型">
-                  {modelName} ▾
-                </button>
+                <div className="model-dropdown-wrap">
+                  <button
+                    className="composer-pill"
+                    onClick={() => { refreshModels(); setShowModelDropdown((v) => !v); }}
+                    title="切换模型"
+                  >
+                    {modelName} ▾
+                  </button>
+                  {showModelDropdown && (
+                    <>
+                      <div className="dropdown-overlay" onClick={() => setShowModelDropdown(false)} />
+                      <div className="model-dropdown">
+                        {models.length === 0 ? (
+                          <div className="model-dropdown-empty">未找到可用模型，请先配置 API Key</div>
+                        ) : models.map((m) => (
+                          <button
+                            key={`${m.provider}/${m.id}`}
+                            className={`model-dropdown-item ${currentModel?.id === m.id ? "active" : ""}`}
+                            onClick={() => { setModel(m.provider, m.id); setShowModelDropdown(false); }}
+                          >
+                            <span className="model-dropdown-name">{m.name}</span>
+                            <span className="model-dropdown-meta">
+                              {m.provider}{m.contextWindow ? ` · ${(m.contextWindow/1000).toFixed(0)}K` : ""}{m.reasoning ? " · 推理" : ""}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
                 <button
-                  className={`composer-pill ${autoConfirm ? "active" : ""}`}
-                  onClick={() => toggleAutoConfirm(!autoConfirm)}
+                  className="composer-pill"
+                  onClick={() => cyclePermissionMode()}
                   title="切换工具权限模式"
                 >
-                  {autoConfirm ? "完全信任" : "标准权限"}
+                  {permissionModeLabel}
                 </button>
                 <button className="composer-pill" onClick={() => setInput("帮我根据选中的物流文件制作发票和箱单，并检查缺失字段。")}>
                   单据制作
@@ -1071,37 +1139,6 @@ export default function App() {
         {toasts.map((t) => <div key={t.id} className={`toast ${t.type}`}>{t.msg}</div>)}
       </div>
 
-      {/* ============ 模型选择 Modal ============ */}
-      {showModelPicker && (
-        <div className="modal-overlay" onClick={() => setShowModelPicker(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-title">选择模型</div>
-            {models.length === 0 ? (
-              <div style={{ color: "var(--fg-muted)", fontSize: 13 }}>未找到可用模型，请先配置 API Key</div>
-            ) : (
-              <div className="model-list">
-                {models.map((m) => (
-                  <div
-                    key={`${m.provider}/${m.id}`}
-                    className={`model-item ${currentModel?.id === m.id ? "active" : ""}`}
-                    onClick={() => setModel(m.provider, m.id)}
-                  >
-                    <div className="model-item-name">{m.name}</div>
-                    <div className="model-item-meta">
-                      <span>{m.provider}</span>
-                      {m.contextWindow && <span>{(m.contextWindow/1000).toFixed(0)}K ctx</span>}
-                      {m.reasoning && <span>推理</span>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="modal-actions" style={{ marginTop: 16 }}>
-              <button className="btn-secondary" onClick={() => setShowModelPicker(false)}>关闭</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ============ 扩展管理 Modal ============ */}
       {showExtManager && <ExtensionManager onClose={() => setShowExtManager(false)} />}
@@ -1348,24 +1385,29 @@ export default function App() {
               <div className="setting-row" style={{ alignItems: "flex-start", flexDirection: "column", gap: "var(--space-2)" }}>
                 <div>
                   <div className="setting-label">权限模式</div>
-                  <div className="setting-desc">控制 AI 助手调用工具时的确认行为。无论哪种模式，AI 都不再每个动作前口头征求同意。</div>
+                  <div className="setting-desc">控制 AI 助手调用工具时的确认行为，减少不必要的权限弹窗。</div>
                 </div>
-                <div style={{ display: "flex", gap: "var(--space-2)" }}>
+                <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap" }}>
                   <button
-                    className={`btn-primary ${!autoConfirm ? "" : "btn-secondary"}`}
-                    style={{ opacity: autoConfirm ? 0.6 : 1 }}
-                    onClick={() => toggleAutoConfirm(false)}
-                  >标准模式</button>
+                    className={`btn-primary ${permissionMode === "cautious" ? "" : "btn-secondary"}`}
+                    style={{ opacity: permissionMode === "cautious" ? 1 : 0.6 }}
+                    onClick={() => setPermissionModePersist("cautious")}
+                  >审慎模式</button>
                   <button
-                    className={`btn-primary ${autoConfirm ? "" : "btn-secondary"}`}
-                    style={{ opacity: autoConfirm ? 1 : 0.6 }}
-                    onClick={() => toggleAutoConfirm(true)}
-                  >完全信任</button>
+                    className={`btn-primary ${permissionMode === "workspace" ? "" : "btn-secondary"}`}
+                    style={{ opacity: permissionMode === "workspace" ? 1 : 0.6 }}
+                    onClick={() => setPermissionModePersist("workspace")}
+                  >工作台模式</button>
+                  <button
+                    className={`btn-primary ${permissionMode === "trust" ? "" : "btn-secondary"}`}
+                    style={{ opacity: permissionMode === "trust" ? 1 : 0.6 }}
+                    onClick={() => setPermissionModePersist("trust")}
+                  >全信任模式</button>
                 </div>
                 <div className="setting-desc" style={{ fontSize: "0.85em" }}>
-                  {autoConfirm
-                    ? "✓ 完全信任：所有工具调用自动放行，零打断（包括删除/外部写/脚本）。最快但有风险。"
-                    : "✓ 标准模式：只读/生成类工具直接执行；删除任务/外部写请求/执行脚本这三类不可逆操作仍弹窗确认。"}
+                  {permissionMode === "cautious" && "✓ 审慎模式：生成文件前确认，删除/外部请求必须确认。最安全，弹窗较多。"}
+                  {permissionMode === "workspace" && "✓ 工作台模式：本地生成和分析自动执行，除了删除等重要修改外都自动放行。推荐。"}
+                  {permissionMode === "trust" && "✓ 全信任模式：所有已授权工具自动执行，零打断。最快但有风险。"}
                 </div>
               </div>
             </div>
