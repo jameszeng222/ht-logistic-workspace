@@ -7,7 +7,7 @@
 //
 // 后端：python-sidecar/main.py（FastAPI on 127.0.0.1:8000）
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -29,6 +29,10 @@ interface SidecarStatus {
   error?: string;
 }
 
+interface ToolsPanelProps {
+  onSendToAssistant?: (message: string) => void;
+}
+
 const INPUT_FILTERS: Record<ToolDef["input"], { name: string; extensions: string[] }[]> = {
   excel: [{ name: "Excel", extensions: ["xlsx", "xls"] }],
   pdf: [{ name: "PDF", extensions: ["pdf"] }],
@@ -46,7 +50,15 @@ const OUTPUT_DEFAULT_NAME: Record<ToolDef["output"], string> = {
   json: "result.json",
 };
 
-export function ToolsPanel() {
+const DAILY_TOOL_IDS = new Set(["invoice-packing", "data-analysis"]);
+
+function workflowLabel(tool: ToolDef): string {
+  if (tool.id === "invoice-packing") return "单据制作";
+  if (tool.id === "data-analysis") return "数据分析";
+  return "物流工具";
+}
+
+export function ToolsPanel({ onSendToAssistant }: ToolsPanelProps) {
   const [tools, setTools] = useState<ToolDef[]>([]);
   const [sidecarUrl, setSidecarUrl] = useState("http://127.0.0.1:8000");
   const [sidecarReady, setSidecarReady] = useState(false);
@@ -60,6 +72,22 @@ export function ToolsPanel() {
   const [jsonResult, setJsonResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const visibleTools = useMemo(() => {
+    const daily = tools.filter((t) => DAILY_TOOL_IDS.has(t.id));
+    return daily.length ? daily : tools.filter((t) => !t.id.includes("customs"));
+  }, [tools]);
+
+  const askAssistantToReview = useCallback(() => {
+    if (!activeTool || !onSendToAssistant) return;
+    const inputLine = filePath ? `输入文件：${filePath}` : "没有记录输入文件。";
+    const resultLine = savedPath
+      ? `输出文件：${savedPath}`
+      : `工具返回 JSON：\n${(jsonResult || "").slice(0, 12000)}`;
+    onSendToAssistant(
+      `我刚用「${activeTool.name}」执行了物流工具。\n${inputLine}\n${resultLine}\n请帮我检查结果、指出潜在风险，并给出下一步建议。`
+    );
+  }, [activeTool, filePath, jsonResult, onSendToAssistant, savedPath]);
+
   // ============ 加载工具列表 + 监听 sidecar 状态 ============
   const refreshTools = useCallback(async () => {
     if (!sidecarReady) return;
@@ -67,8 +95,10 @@ export function ToolsPanel() {
       const resp = await fetch(`${sidecarUrl}/api/tools`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      setTools(data.tools || []);
-      if (!activeTool && data.tools?.length) setActiveTool(data.tools[0]);
+      const nextTools = (data.tools || []) as ToolDef[];
+      setTools(nextTools);
+      const preferred = nextTools.find((t) => DAILY_TOOL_IDS.has(t.id)) || nextTools[0];
+      if (!activeTool && preferred) setActiveTool(preferred);
     } catch (e) {
       setError(`拉取工具列表失败：${e}`);
     }
@@ -186,7 +216,10 @@ export function ToolsPanel() {
   return (
     <div className="tools-panel">
       <div className="tools-header">
-        <div className="tools-title">工具区</div>
+        <div>
+          <div className="tools-title">物流工具区</div>
+          <div className="tools-subtitle">日常单据制作和 Excel 数据分析</div>
+        </div>
         <div className={`sidecar-status ${sidecarReady ? "ready" : "error"}`}>
           <span className="dot" />
           {sidecarReady ? "Sidecar 在线" : sidecarError ? "Sidecar 异常" : "Sidecar 启动中…"}
@@ -198,12 +231,12 @@ export function ToolsPanel() {
 
       <div className="tools-body">
         <div className="tools-list">
-          <div className="tools-list-title">可用工具</div>
-          {tools.length === 0 ? (
+          <div className="tools-list-title">日常流程</div>
+          {visibleTools.length === 0 ? (
             <div className="tools-empty">
               {sidecarReady ? "未拉到工具列表" : "等待 sidecar 就绪…"}
             </div>
-          ) : tools.map((t) => (
+          ) : visibleTools.map((t) => (
             <button
               key={t.id}
               className={`tool-card ${activeTool?.id === t.id ? "active" : ""}`}
@@ -212,6 +245,8 @@ export function ToolsPanel() {
               <div className="tool-card-name">{t.name}</div>
               <div className="tool-card-desc">{t.description}</div>
               <div className="tool-card-meta">
+                <span>{workflowLabel(t)}</span>
+                <span>·</span>
                 <span>{t.input.toUpperCase()}</span>
                 <span>→</span>
                 <span>{t.output.toUpperCase()}</span>
@@ -280,6 +315,12 @@ export function ToolsPanel() {
                     className="btn-secondary"
                     onClick={() => invoke("open_in_explorer", { path: savedPath })}
                   >在文件夹中显示</button>
+                  {onSendToAssistant && (
+                    <button
+                      className="btn-secondary"
+                      onClick={askAssistantToReview}
+                    >让助手解读</button>
+                  )}
                 </div>
               )}
 
@@ -288,6 +329,12 @@ export function ToolsPanel() {
                 <div className="tool-result">
                   <div className="tool-result-label">✓ 完成 — 分析结果：</div>
                   <pre className="tool-result-json">{jsonResult}</pre>
+                  {onSendToAssistant && (
+                    <button
+                      className="btn-secondary"
+                      onClick={askAssistantToReview}
+                    >让助手解读</button>
+                  )}
                 </div>
               )}
             </>

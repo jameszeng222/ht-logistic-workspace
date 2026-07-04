@@ -91,11 +91,12 @@ function splitPath(path: string): { name: string; path: string }[] {
 
 interface FileBrowserProps {
   currentCwd?: string;
+  compact?: boolean;
 }
 
 type BrowserTab = "workspace" | "sessions";
 
-export function FileBrowser({ currentCwd }: FileBrowserProps) {
+export function FileBrowser({ currentCwd, compact = false }: FileBrowserProps) {
   const [tab, setTab] = useState<BrowserTab>("workspace");
   const [agentPaths, setAgentPaths] = useState<AgentPaths | null>(null);
   const [entries, setEntries] = useState<DirEntry[]>([]);
@@ -230,7 +231,7 @@ export function FileBrowser({ currentCwd }: FileBrowserProps) {
   const breadcrumbs = currentPath ? splitPath(currentPath) : [];
 
   return (
-    <div className="file-browser">
+    <div className={`file-browser ${compact ? "compact" : ""}`}>
       {/* 标签页切换 */}
       <div className="fb-tabs">
         <button
@@ -310,12 +311,12 @@ export function FileBrowser({ currentCwd }: FileBrowserProps) {
         ) : (
           <>
             {/* 表头 */}
-            <div className="fb-list-header">
+            {!compact && <div className="fb-list-header">
               <span className="fb-col-name">名称</span>
               <span className="fb-col-size">大小</span>
               <span className="fb-col-modified">修改时间</span>
               <span className="fb-col-actions">操作</span>
-            </div>
+            </div>}
             {/* 条目 */}
             {entries.map((entry) => (
               <div

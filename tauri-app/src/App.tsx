@@ -68,10 +68,6 @@ function useTheme() {
 export default function App() {
   const { theme, setTheme } = useTheme();
 
-  // 顶部主 tab：「助手」= Pi 聊天，「工具」= 工具区（拖拽文件 → 调 FastAPI → 下载结果）
-  // 两个区域职责分离：助手靠 Pi 子进程；工具靠 Python sidecar。互不打断。
-  const [activeView, setActiveView] = useState<"chat" | "tools" | "files">("chat");
-
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [ready, setReady] = useState(false);
@@ -831,31 +827,15 @@ export default function App() {
     <div className="app">
       {/* ============ 顶栏 ============ */}
       <header className="header">
-        <button className="icon-btn" onClick={() => { refreshEnvKeys(); loadSystemPrompt(systemPromptPath); loadModelConfig(); setShowSettings(true); }} title="设置">☰</button>
-        {/* 主区域切换 tab：助手（Pi 聊天）/ 工具（FastAPI 工具区）/ 文件（文件浏览器） */}
-        <div className="header-tabs">
-          <button
-            className={`header-tab ${activeView === "chat" ? "active" : ""}`}
-            onClick={() => setActiveView("chat")}
-          >助手</button>
-          <button
-            className={`header-tab ${activeView === "tools" ? "active" : ""}`}
-            onClick={() => setActiveView("tools")}
-          >工具</button>
-          <button
-            className={`header-tab ${activeView === "files" ? "active" : ""}`}
-            onClick={() => setActiveView("files")}
-          >文件</button>
+        <div className="app-brand">
+          <span className="app-brand-mark">HT</span>
+          <span>Logistic Workspace</span>
         </div>
         <span className={`header-status ${ready ? (busy ? "busy" : "ready") : "error"}`}>
           <span className="dot" />
           {ready ? (busy ? "思考中" : "就绪") : "未连接"}
         </span>
         <div className="header-spacer" />
-        {/* 模型切换按钮 */}
-        <button className="model-btn" onClick={() => { refreshModels(); setShowModelPicker(true); }} title="切换模型">
-          {modelName} ▾
-        </button>
         {/* 扩展管理 */}
         <button className="icon-btn" onClick={() => setShowExtManager(true)} title="扩展管理">🧩</button>
         {/* 调试日志 */}
@@ -870,13 +850,7 @@ export default function App() {
       </header>
 
       {/* ============ 主体 ============ */}
-      <div className="body">
-        {activeView === "tools" ? (
-          <ToolsPanel />
-        ) : activeView === "files" ? (
-          <FileBrowser currentCwd={currentSessionCwd} />
-        ) : (
-        <>
+      <div className="body workspace-mode">
         {/* 左侧栏 */}
         <aside className="sidebar">
           {/* 会话列表 */}
@@ -1079,41 +1053,68 @@ export default function App() {
             {showCmdPalette && (
               <CommandPalette input={input} index={cmdIndex} setIndex={setCmdIndex} onSelect={onCmdSelect} />
             )}
-            <div className="composer-inner">
-              <textarea
-                value={input}
-                onChange={(e) => { setInput(e.target.value); setShowCmdPalette(e.target.value.startsWith("/")); }}
-                onKeyDown={(e) => {
-                  if (showCmdPalette) {
-                    if (e.key === "ArrowDown") { e.preventDefault(); setCmdIndex((i) => Math.min(i + 1, 7)); return; }
-                    if (e.key === "ArrowUp") { e.preventDefault(); setCmdIndex((i) => Math.max(i - 1, 0)); return; }
-                    if (e.key === "Escape") { e.preventDefault(); setShowCmdPalette(false); return; }
-                    if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey) {
-                      const cmdEl = document.querySelector(".cmd-item.active") as HTMLElement;
-                      if (cmdEl) { e.preventDefault(); cmdEl.click(); return; }
+            <div className="composer-shell">
+              <div className="composer-toolbar">
+                <button className="composer-pill" onClick={() => { refreshModels(); setShowModelPicker(true); }} title="切换模型">
+                  {modelName} ▾
+                </button>
+                <button
+                  className={`composer-pill ${autoConfirm ? "active" : ""}`}
+                  onClick={() => toggleAutoConfirm(!autoConfirm)}
+                  title="切换工具权限模式"
+                >
+                  {autoConfirm ? "完全信任" : "标准权限"}
+                </button>
+                <button className="composer-pill" onClick={() => setInput("帮我根据选中的物流文件制作发票和箱单，并检查缺失字段。")}>
+                  单据制作
+                </button>
+                <button className="composer-pill" onClick={() => setInput("帮我分析这个物流 Excel，输出异常、趋势和下一步建议。")}>
+                  数据分析
+                </button>
+                <button className="composer-pill" onClick={() => { setInput("/"); setShowCmdPalette(true); }}>
+                  工具调用
+                </button>
+              </div>
+              <div className="composer-inner">
+                <textarea
+                  value={input}
+                  onChange={(e) => { setInput(e.target.value); setShowCmdPalette(e.target.value.startsWith("/")); }}
+                  onKeyDown={(e) => {
+                    if (showCmdPalette) {
+                      if (e.key === "ArrowDown") { e.preventDefault(); setCmdIndex((i) => Math.min(i + 1, 7)); return; }
+                      if (e.key === "ArrowUp") { e.preventDefault(); setCmdIndex((i) => Math.max(i - 1, 0)); return; }
+                      if (e.key === "Escape") { e.preventDefault(); setShowCmdPalette(false); return; }
+                      if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey) {
+                        const cmdEl = document.querySelector(".cmd-item.active") as HTMLElement;
+                        if (cmdEl) { e.preventDefault(); cmdEl.click(); return; }
+                      }
                     }
-                  }
-                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
-                }}
-                onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 200) + "px"; }}
-                placeholder={ready ? "输入消息…  Enter 发送 · Shift+Enter 换行 · / 查看命令" : "正在连接 Pi…"}
-                rows={1}
-                disabled={!ready}
-              />
-              {busy ? (
-                <button className="abort-btn" onClick={abort} title="中断">中断</button>
-              ) : (
-                <button className="send-btn" onClick={() => send()} disabled={!inputCanSend} title="发送">发送</button>
-              )}
+                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+                  }}
+                  onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 200) + "px"; }}
+                  placeholder={ready ? "描述你要处理的单据或数据，也可以直接在下方工具区选择文件…" : "正在连接 Pi…"}
+                  rows={1}
+                  disabled={!ready}
+                />
+                {busy ? (
+                  <button className="abort-btn" onClick={abort} title="中断">中断</button>
+                ) : (
+                  <button className="send-btn" onClick={() => send()} disabled={!inputCanSend} title="发送">发送</button>
+                )}
+              </div>
             </div>
             <div className="composer-hint">
-              <span className="kbd">Enter</span> 发送 · <span className="kbd">Shift+Enter</span> 换行
+              <span className="kbd">Enter</span> 发送 · <span className="kbd">Shift+Enter</span> 换行 · 物流工具在下方执行，结果可交给助手解读
               {busy && <span className="hint-busy"> · Pi 思考中…</span>}
             </div>
           </div>
+          <section className="tool-workbench">
+            <ToolsPanel onSendToAssistant={(message) => send(message)} />
+          </section>
         </main>
-        </>
-        )}
+        <aside className="workspace-files">
+          <FileBrowser currentCwd={currentSessionCwd} compact />
+        </aside>
       </div>
 
       {/* ============ Toast ============ */}
