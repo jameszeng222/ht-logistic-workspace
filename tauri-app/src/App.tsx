@@ -9,6 +9,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { PiEvent } from "./pi-client";
 import { Markdown } from "./Markdown";
 import { CommandPalette } from "./CommandPalette";
@@ -803,6 +804,12 @@ export default function App() {
           📋
           {logs.length > 0 && <span className="badge">{logs.length}</span>}
         </button>
+        {/* 窗口控制（自定义标题栏） */}
+        <div className="window-controls">
+          <button className="win-btn" onClick={() => getCurrentWindow().minimize()} title="最小化">&#8211;</button>
+          <button className="win-btn" onClick={() => getCurrentWindow().toggleMaximize()} title="最大化">&#9633;</button>
+          <button className="win-btn close" onClick={() => getCurrentWindow().close()} title="关闭">&#10005;</button>
+        </div>
       </header>
 
       {/* ============ 主体 ============ */}
@@ -945,13 +952,13 @@ export default function App() {
                 </div>
               ) : turns.map((turn) => (
                 <div key={turn.id} className="turn">
-                  <div className="msg user">
-                    <div className="msg-avatar user-avatar">你</div>
-                    <div className="msg-content"><div className="msg-bubble user-bubble">{turn.userMessage}</div></div>
-                  </div>
+                  {turn.userMessage && (
+                    <div className="msg user">
+                      <div className="msg-content"><div className="msg-bubble user-bubble">{turn.userMessage}</div></div>
+                    </div>
+                  )}
                   {turn.assistantMsgs.length === 0 && turn.status === "streaming" ? (
                     <div className="msg assistant">
-                      <div className="msg-avatar assistant-avatar">Pi</div>
                       <div className="msg-content">
                         <div className="msg-bubble assistant-bubble">
                           <span className="thinking-dots"><span className="dot-pulse" /><span className="dot-pulse" /><span className="dot-pulse" /></span>
@@ -960,7 +967,6 @@ export default function App() {
                     </div>
                   ) : turn.assistantMsgs.map((msg) => (
                     <div key={msg.id} className={`msg assistant ${msg.streaming ? "streaming" : ""}`}>
-                      <div className="msg-avatar assistant-avatar">Pi</div>
                       <div className="msg-content">
                         {msg.thinking && (
                           <details className="reasoning">
