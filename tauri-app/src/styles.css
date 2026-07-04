@@ -438,7 +438,7 @@ body {
 }
 
 /* 会话列表 */
-.session-list { flex: 1; overflow-y: auto; padding: var(--space-1) var(--space-2) var(--space-2); }
+.session-list { flex: 1 1 auto; overflow-y: auto; padding: var(--space-1) var(--space-2) var(--space-2); max-height: 320px; }
 
 .session-group { margin-bottom: var(--space-3); }
 .session-group-header {
@@ -458,8 +458,12 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: ui-monospace, SFMono-Regular, monospace;
+  /* 项目名用与首页 HT LOGISTIC AGENT 胶囊同样的字体风格：sans + 宽字距 + 半粗 */
+  font-family: var(--font-sans);
   font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 .session-group-count {
   background: var(--surface-hover);
@@ -533,17 +537,22 @@ body {
 .context-bar-fill.mid { background: var(--warning); }
 .context-bar-fill.high { background: var(--danger); }
 
-/* ============ sidebar 底部紧凑状态条 ============ */
+/* ============ sidebar 底部状态条（2 行）============ */
 .sidebar-footer-bar {
   display: flex; flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   padding: var(--space-2) var(--space-4);
   border-top: 1px solid var(--border-subtle);
   background: var(--bg);
   flex-shrink: 0;
 }
-/* 信息行：状态 · 模型 · 权限 · 上下文%  全部一行，超出截断 */
-.sidebar-footer-info {
+/* 第 1 行：状态点 + 状态文字 */
+.sidebar-footer-row1 {
+  display: flex; align-items: center; gap: var(--space-1);
+  font-size: 11px; color: var(--fg-muted);
+}
+/* 第 2 行：模型 · 权限 · 上下文% */
+.sidebar-footer-row2 {
   display: flex; align-items: center; gap: 5px;
   font-size: 11px; color: var(--fg-subtle);
   min-width: 0;
@@ -559,7 +568,7 @@ body {
 .sidebar-footer-sep { color: var(--fg-subtle); opacity: 0.5; flex-shrink: 0; }
 .sidebar-footer-model {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  min-width: 0; max-width: 90px;
+  min-width: 0; max-width: 120px;
   font-family: var(--font-mono);
 }
 .sidebar-footer-perm { flex-shrink: 0; }
@@ -633,6 +642,12 @@ body {
 .tool-workbench .tools-body:not(:has(.tools-list)) .tools-detail {
   width: 100%;
 }
+/* 标题与执行卡片左/右边对齐：同样 max-width 720px 居中 */
+.tool-workbench .tools-header {
+  max-width: 720px;
+  margin: 0 auto var(--space-2);
+  padding: 0;
+}
 .tool-workbench .tools-list {
   width: 240px;
   max-height: 340px;
@@ -685,18 +700,18 @@ body {
   font-weight: 700;
   letter-spacing: 0.06em;
 }
-/* 首页 HT 标识：克制，替代大 emoji */
+/* 首页 HT 标识：薄荷绿胶囊，16px */
 .empty-mark {
   display: inline-flex; align-items: center; justify-content: center;
-  padding: 5px var(--space-3);
+  padding: 4px var(--space-3);
   border-radius: var(--radius-full);
   background: #E6F3EF;
   color: #1B6B5C;
-  font-size: 19px; font-weight: 600; letter-spacing: 0.12em;
-  margin-bottom: var(--space-5);
+  font-size: 16px; font-weight: 600; letter-spacing: 0.14em;
+  margin-bottom: var(--space-6);
 }
 .empty-state h3 {
-  font-size: 72px; font-weight: 650; margin-bottom: var(--space-2);
+  font-size: 62px; font-weight: 650; margin-bottom: var(--space-3);
   letter-spacing: -0.02em;
   line-height: 1.05;
 }
@@ -706,6 +721,16 @@ body {
   max-width: 620px;
   margin: 0 auto;
   letter-spacing: 0.02em;
+}
+/* Pilot 薄荷绿胶囊 */
+.empty-pilot {
+  display: inline-block;
+  padding: 1px 10px;
+  border-radius: var(--radius-full);
+  background: #E6F3EF;
+  color: #1B6B5C;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 .empty-suggestions {
   display: flex; flex-wrap: wrap; gap: var(--space-2);

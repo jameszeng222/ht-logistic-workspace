@@ -290,8 +290,7 @@ export const ToolsPanel = forwardRef<ToolsPanelHandle, ToolsPanelProps>(function
     <div className="tools-panel">
       <div className="tools-header">
         <div>
-          <div className="tools-title">物流工具区</div>
-          <div className="tools-subtitle">日常单据制作和 Excel 数据分析</div>
+          <div className="tools-title">工具执行区</div>
         </div>
         <div className={`sidecar-status ${sidecarReady ? "ready" : "error"}`}>
           <span className="dot" />

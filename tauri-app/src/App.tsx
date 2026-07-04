@@ -1193,7 +1193,9 @@ export default function App() {
         {/* 左侧栏 */}
         <aside className="sidebar">
           {/* 会话列表（顶部，最重要）*/}
-          <div className="sidebar-section" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          {/* 会话列表：高度自适应内容（不再 flex:1 撑满），让下方"物流工具"上移
+              与中间工具执行区顶部大致对齐；列表自身滚动 */}
+          <div className="sidebar-section" style={{ flex: "0 1 auto", display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
             <div className="sidebar-section-header">
               <span className="sidebar-title">历史会话</span>
               <button className="sidebar-new-btn" onClick={newSession} disabled={busy}>+ 新建</button>
@@ -1302,13 +1304,16 @@ export default function App() {
             </div>
           </div>
 
-          {/* sidebar 底部紧凑状态条：状态 + 模型 + 权限 + 上下文用量
-              把 composer 里的模型/权限信息只读镜像到左下角，让底部不再是单条进度条 */}
+          {/* sidebar 底部状态条（2 行）：
+              第 1 行：状态点 + 状态文字
+              第 2 行：模型 · 权限 · 上下文%
+              下方全宽细进度条 */}
           <div className="sidebar-footer-bar">
-            <div className="sidebar-footer-info" title={`模型：${currentModel?.name ?? "未连接"} · ${permissionModeLabel}`}>
+            <div className="sidebar-footer-row1" title={permissionModeLabel}>
               <span className={`sidebar-footer-dot ${ready ? (busy ? "busy" : "ready") : "error"}`} />
               <span className="sidebar-footer-state">{ready ? (busy ? "思考中" : "空闲") : "未连接"}</span>
-              <span className="sidebar-footer-sep">·</span>
+            </div>
+            <div className="sidebar-footer-row2" title={`模型：${currentModel?.name ?? "未连接"}`}>
               <span className="sidebar-footer-model">{currentModel?.name ?? "—"}</span>
               <span className="sidebar-footer-sep">·</span>
               <span className="sidebar-footer-perm">{permissionMode === "cautious" ? "审慎" : permissionMode === "workspace" ? "工作台" : "信任"}</span>
@@ -1335,7 +1340,7 @@ export default function App() {
                 <div className="empty-state">
                   <div className="empty-mark">HT LOGISTIC AGENT</div>
                   <h3>Logistic Workspace</h3>
-                  <p>Pilot · 物流工作台 AI 调度员</p>
+                  <p><span className="empty-pilot">Pilot</span> · 物流工作台 AI 调度员</p>
                   <div className="empty-suggestions">
                     <button className="suggestion-chip" onClick={() => { setInput("分析这个 Excel 的关键数据和异常点"); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer-shell textarea")?.focus(), 0); }}>分析 Excel 关键数据</button>
                     <button className="suggestion-chip" onClick={() => { setInput("根据这份提单生成装箱单"); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer-shell textarea")?.focus(), 0); }}>根据提单生成装箱单</button>
