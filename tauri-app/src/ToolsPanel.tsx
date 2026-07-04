@@ -31,6 +31,8 @@ interface SidecarStatus {
 
 interface ToolsPanelProps {
   onSendToAssistant?: (message: string) => void;
+  /** 工具执行成功并保存输出文件后回调，路径交给 App 加入"工具输出"上下文 */
+  onToolOutput?: (path: string, toolName: string) => void;
 }
 
 /**
@@ -71,7 +73,7 @@ function workflowLabel(tool: ToolDef): string {
   return "物流工具";
 }
 
-export const ToolsPanel = forwardRef<ToolsPanelHandle, ToolsPanelProps>(function ToolsPanel({ onSendToAssistant }, ref) {
+export const ToolsPanel = forwardRef<ToolsPanelHandle, ToolsPanelProps>(function ToolsPanel({ onSendToAssistant, onToolOutput }, ref) {
   const [tools, setTools] = useState<ToolDef[]>([]);
   const [sidecarUrl, setSidecarUrl] = useState("http://127.0.0.1:8000");
   const [sidecarReady, setSidecarReady] = useState(false);
@@ -252,6 +254,8 @@ export const ToolsPanel = forwardRef<ToolsPanelHandle, ToolsPanelProps>(function
         const buf = new Uint8Array(await resultBlob.arrayBuffer());
         await invoke("write_binary_file", { path: savePath, data: Array.from(buf) });
         setSavedPath(savePath);
+        // 通知 App 加入"工具输出"上下文区
+        if (onToolOutput) onToolOutput(savePath, activeTool?.name || "物流工具");
       }
     } catch (e) {
       setError(`工具执行失败：${e}`);

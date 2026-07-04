@@ -102,11 +102,15 @@ interface FileBrowserProps {
   onPickFile?: (path: string) => void;
   /** 点击"单据"/"数据"按钮时回调，把文件交给工具区执行对应工具 */
   onRunTool?: (path: string, toolKind: "invoice" | "data") => void;
+  /** 最近使用文件（localStorage 持久化），上下文区显示 */
+  recentFiles?: string[];
+  /** 工具输出文件（最近 3 个），上下文区显示 */
+  toolOutputs?: { path: string; toolName: string; time: number }[];
 }
 
 type BrowserTab = "workspace" | "sessions";
 
-export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool }: FileBrowserProps) {
+export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool, recentFiles = [], toolOutputs = [] }: FileBrowserProps) {
   const [tab, setTab] = useState<BrowserTab>("workspace");
   const [agentPaths, setAgentPaths] = useState<AgentPaths | null>(null);
   const [entries, setEntries] = useState<DirEntry[]>([]);
@@ -242,6 +246,55 @@ export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool
 
   return (
     <div className={`file-browser ${compact ? "compact" : ""}`}>
+      {/* 上下文区：最近使用 + 工具输出（在文件浏览之上，体现"工作台上下文"）*/}
+      {(recentFiles.length > 0 || toolOutputs.length > 0) && (
+        <div className="fb-context">
+          {recentFiles.length > 0 && (
+            <div className="fb-context-group">
+              <div className="fb-context-title">最近使用</div>
+              {recentFiles.slice(0, 3).map((p, i) => {
+                const name = p.split(/[\\/]/).pop() || p;
+                return (
+                  <div key={`r${i}`} className="fb-context-item" title={p}>
+                    <span className="fb-context-icon">{getFileIcon(name)}</span>
+                    <span className="fb-context-name">{name}</span>
+                    <span className="fb-context-actions" onClick={(e) => e.stopPropagation()}>
+                      {onRunTool && isExcelFile(name) && (
+                        <button className="fb-ctx-btn" onClick={() => onRunTool(p, "invoice")} title="单据">单</button>
+                      )}
+                      {onRunTool && isExcelFile(name) && (
+                        <button className="fb-ctx-btn" onClick={() => onRunTool(p, "data")} title="数据">析</button>
+                      )}
+                      {onPickFile && (
+                        <button className="fb-ctx-btn fb-ctx-btn-primary" onClick={() => onPickFile(p)} title="分析">析</button>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {toolOutputs.length > 0 && (
+            <div className="fb-context-group">
+              <div className="fb-context-title">工具输出</div>
+              {toolOutputs.map((o, i) => {
+                const name = o.path.split(/[\\/]/).pop() || o.path;
+                return (
+                  <div key={`t${i}`} className="fb-context-item" title={`${o.toolName} → ${o.path}`}>
+                    <span className="fb-context-icon">{getFileIcon(name)}</span>
+                    <span className="fb-context-name">{name}</span>
+                    <span className="fb-context-actions" onClick={(e) => e.stopPropagation()}>
+                      {onPickFile && (
+                        <button className="fb-ctx-btn fb-ctx-btn-primary" onClick={() => onPickFile(o.path)} title="加入分析">析</button>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
       {/* 标签页切换 */}
       <div className="fb-tabs">
         <button

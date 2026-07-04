@@ -872,6 +872,25 @@ export default function App() {
     setAttachments((prev) => prev.filter((p) => p !== path));
   }, []);
 
+  // ====== 最近使用文件 + 工具输出（右侧文件栏上下文区）======
+  // recentFiles: 用户最近分析/执行工具的文件，localStorage 持久化，最多 5 个
+  // toolOutputs: 工具执行后保存的输出文件，最近 3 个
+  const [recentFiles, setRecentFiles] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem("pi-recent-files") || "[]"); }
+    catch { return []; }
+  });
+  const [toolOutputs, setToolOutputs] = useState<{ path: string; toolName: string; time: number }[]>([]);
+  const addRecentFile = useCallback((path: string) => {
+    setRecentFiles((prev) => {
+      const next = [path, ...prev.filter((p) => p !== path)].slice(0, 5);
+      localStorage.setItem("pi-recent-files", JSON.stringify(next));
+      return next;
+    });
+  }, []);
+  const addToolOutput = useCallback((path: string, toolName: string) => {
+    setToolOutputs((prev) => [{ path, toolName, time: Date.now() }, ...prev].slice(0, 3));
+  }, []);
+
   // ====== 从文件浏览器一键加入聊天分析 ======
   // 把文件加到附件列表，并填入默认分析 prompt（仅在输入框为空时填入，避免覆盖正在编辑的内容）
   const pickFileFromBrowser = useCallback((path: string) => {
@@ -881,8 +900,9 @@ export default function App() {
     setAttachments((prev) => prev.includes(trimmed) ? prev : [...prev, trimmed]);
     // 仅在输入框为空时填入默认 prompt，避免覆盖用户正在编辑的内容
     setInput((prev) => prev.trim() ? prev : `请分析附件文件 ${fileName}，输出关键内容、异常点和下一步建议。`);
+    addRecentFile(trimmed);
     toast(`已加入附件：${fileName}（可直接发送）`, "success");
-  }, [toast]);
+  }, [toast, addRecentFile]);
 
   // ====== 从文件浏览器一键执行工具 ======
   // 点击"单据"/"数据"按钮：通过 toolsPanelRef 命令式调用 loadFile，
@@ -893,8 +913,9 @@ export default function App() {
     if (!trimmed) return;
     const fileName = trimmed.split(/[\\/]/).pop() || trimmed;
     toolsPanelRef.current?.loadFile(trimmed, toolKind);
+    addRecentFile(trimmed);
     toast(`已加载到工具区：${fileName}（${toolKind === "invoice" ? "单据制作" : "数据分析"}）`, "success");
-  }, [toast]);
+  }, [toast, addRecentFile]);
 
   // ====== 工作目录设定 ======
   // 持久化到 localStorage；applyWorkdir 会重启 pi 进程使新 cwd 生效。
@@ -1168,14 +1189,7 @@ export default function App() {
       <div className="body workspace-mode">
         {/* 左侧栏 */}
         <aside className="sidebar">
-          {/* 扩展管理 */}
-          <div className="sidebar-section sidebar-ext-section">
-            <div className="sidebar-section-header">
-              <span className="sidebar-title">扩展与技能</span>
-              <button className="sidebar-new-btn" onClick={() => setShowExtManager(true)} title="管理扩展和技能">管理</button>
-            </div>
-          </div>
-          {/* 会话列表 */}
+          {/* 会话列表（顶部，最重要）*/}
           <div className="sidebar-section" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
             <div className="sidebar-section-header">
               <span className="sidebar-title">历史会话</span>
@@ -1262,33 +1276,20 @@ export default function App() {
             </div>
           </div>
 
-          {/* 统计 */}
-          <div className="sidebar-section">
-            <div className="sidebar-section-header"><span className="sidebar-title">当前会话</span></div>
-            <div className="sidebar-stats">
-              <div className="stat-row">
-                <span className="stat-label">状态</span>
-                <span className={`stat-value ${ready ? (busy ? "busy" : "ready") : "error"}`}>
-                  {ready ? (busy ? "思考中" : "空闲") : "未连接"}
-                </span>
-              </div>
-              {sessionStats?.cost != null && (
-                <div className="stat-row"><span className="stat-label">费用</span><span className="stat-value">${sessionStats.cost.toFixed(4)}</span></div>
-              )}
+          {/* sidebar 底部紧凑状态条：上下文用量 + 状态，弱化视觉权重 */}
+          <div className="sidebar-footer-bar">
+            <div className="sidebar-footer-status">
+              <span className={`sidebar-footer-dot ${ready ? (busy ? "busy" : "ready") : "error"}`} />
+              <span>{ready ? (busy ? "思考中" : "空闲") : "未连接"}</span>
             </div>
-          </div>
-
-          {/* 上下文用量 */}
-          <div className="sidebar-section">
-            <div className="context-bar-wrap">
-              <div className="context-bar-label">
-                <span>上下文用量</span>
-                <span>{contextPercent > 0 ? `${contextPercent.toFixed(0)}%` : "—"}</span>
+            {contextPercent > 0 && (
+              <div className="sidebar-footer-ctx" title={`上下文 ${contextPercent.toFixed(0)}% · ${sessionStats?.contextUsage?.tokens ?? 0} / ${sessionStats?.contextUsage?.contextWindow ?? 0} tokens`}>
+                <div className="sidebar-footer-ctx-bar">
+                  <div className={`sidebar-footer-ctx-fill ${contextClass}`} style={{ width: `${Math.min(contextPercent, 100)}%` }} />
+                </div>
+                <span className="sidebar-footer-ctx-text">{contextPercent.toFixed(0)}%</span>
               </div>
-              <div className="context-bar">
-                <div className={`context-bar-fill ${contextClass}`} style={{ width: `${Math.min(contextPercent, 100)}%` }} />
-              </div>
-            </div>
+            )}
           </div>
         </aside>
 
@@ -1298,13 +1299,13 @@ export default function App() {
             <div className="messages-inner">
               {turns.length === 0 ? (
                 <div className="empty-state">
-                  <div className="empty-icon">👩‍✈️</div>
-                  <h3>HT Logistic Workspace</h3>
-                  <p>你是物流工作台的 AI 调度员 Pilot，优先围绕当前文件、物流工具、单据制作、数据分析完成任务。</p>
+                  <div className="empty-mark">HT</div>
+                  <h3>Logistic Workspace</h3>
+                  <p>Pilot · 物流工作台 AI 调度员</p>
                   <div className="empty-suggestions">
-                    <button className="suggestion-chip" onClick={() => { setInput("帮我分析这个 Excel 的关键数据和异常点"); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer-shell textarea")?.focus(), 0); }}>📊 分析 Excel 关键数据</button>
-                    <button className="suggestion-chip" onClick={() => { setInput("根据这份提单生成装箱单"); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer-shell textarea")?.focus(), 0); }}>📄 根据提单生成装箱单</button>
-                    <button className="suggestion-chip" onClick={() => { setInput("汇总这批货物的运费和时效"); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer-shell textarea")?.focus(), 0); }}>🚚 汇总运费和时效</button>
+                    <button className="suggestion-chip" onClick={() => { setInput("分析这个 Excel 的关键数据和异常点"); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer-shell textarea")?.focus(), 0); }}>分析 Excel 关键数据</button>
+                    <button className="suggestion-chip" onClick={() => { setInput("根据这份提单生成装箱单"); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer-shell textarea")?.focus(), 0); }}>根据提单生成装箱单</button>
+                    <button className="suggestion-chip" onClick={() => { setInput("汇总这批货物的运费和时效"); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer-shell textarea")?.focus(), 0); }}>汇总运费和时效</button>
                   </div>
                 </div>
               ) : turns.map((turn) => (
@@ -1435,40 +1436,40 @@ export default function App() {
                 <div className="composer-pill-group">
                   <button
                     type="button"
-                    className="composer-pill"
+                    className="composer-pill composer-pill-icon"
                     onClick={pickAttachments}
                     title="添加附件（Excel/Word/PDF 等）"
                   >
-                    📎 附件
+                    📎
                   </button>
                   <button
                     ref={modelBtnRef}
                     type="button"
-                    className="composer-pill"
+                    className="composer-pill composer-pill-model"
                     onClick={() => showModelDropdown ? setShowModelDropdown(false) : (refreshModels(), openDropdown(modelBtnRef.current, "model"))}
-                    title="切换模型"
+                    title={`模型：${modelName}`}
                   >
-                    {modelName} ▾
+                    <span className="composer-pill-text">{modelName}</span>▾
                   </button>
                   <button
                     ref={permBtnRef}
                     type="button"
                     className="composer-pill"
                     onClick={() => showPermissionDropdown ? setShowPermissionDropdown(false) : openDropdown(permBtnRef.current, "perm")}
-                    title="切换工具权限模式"
+                    title={`权限模式：${permissionModeLabel}`}
                   >
-                    {permissionModeLabel} ▾
+                    {permissionMode === "cautious" ? "审慎" : permissionMode === "workspace" ? "工作台" : "信任"}▾
                   </button>
                 </div>
                 <div className="composer-pill-group">
-                  <button type="button" className="composer-pill" onClick={() => setInput("帮我根据选中的物流文件制作发票和箱单，并检查缺失字段。")}>
-                    单据制作
+                  <button type="button" className="composer-pill composer-pill-quick" onClick={() => setInput("帮我根据选中的物流文件制作发票和箱单，并检查缺失字段。")}>
+                    单据
                   </button>
-                  <button type="button" className="composer-pill" onClick={() => setInput("帮我分析这个物流 Excel，输出异常、趋势和下一步建议。")}>
-                    数据分析
+                  <button type="button" className="composer-pill composer-pill-quick" onClick={() => setInput("帮我分析这个物流 Excel，输出异常、趋势和下一步建议。")}>
+                    数据
                   </button>
-                  <button type="button" className="composer-pill" onClick={() => { setInput("/"); setShowCmdPalette(true); }}>
-                    工具调用
+                  <button type="button" className="composer-pill composer-pill-icon" onClick={() => { setInput("/"); setShowCmdPalette(true); }} title="斜杠命令 / 工具调用">
+                    🔧
                   </button>
                 </div>
               </div>
@@ -1532,7 +1533,7 @@ export default function App() {
             </div>
           </div>
           <section className="tool-workbench">
-            <ToolsPanel ref={toolsPanelRef} onSendToAssistant={(message) => send(message)} />
+            <ToolsPanel ref={toolsPanelRef} onSendToAssistant={(message) => send(message)} onToolOutput={addToolOutput} />
           </section>
         </main>
         <aside className="workspace-files">
@@ -1541,6 +1542,8 @@ export default function App() {
             compact
             onPickFile={pickFileFromBrowser}
             onRunTool={runToolFromBrowser}
+            recentFiles={recentFiles}
+            toolOutputs={toolOutputs}
           />
         </aside>
       </div>
@@ -1626,6 +1629,17 @@ export default function App() {
               </div>
               <div style={{ marginTop: 6, fontSize: 12, color: "var(--fg-muted)" }}>
                 设定后，pi 的工作目录固定为此处。新建会话的输入输出文件、文件浏览器默认定位都基于此目录，方便查找。切换会重启 pi 进程。
+              </div>
+            </div>
+
+            {/* 扩展与技能管理（从侧栏顶部下沉到设置，减少首屏干扰）*/}
+            <div className="settings-section">
+              <div className="settings-section-title">扩展与技能</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <button type="button" className="btn-primary" onClick={() => { setShowSettings(false); setShowExtManager(true); }}>管理扩展和技能</button>
+              </div>
+              <div style={{ marginTop: 6, fontSize: 12, color: "var(--fg-muted)" }}>
+                管理 Pi 加载的扩展工具和技能（物流工具、单据生成器等）。
               </div>
             </div>
 
