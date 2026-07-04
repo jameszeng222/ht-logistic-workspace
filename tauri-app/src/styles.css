@@ -804,10 +804,9 @@ body {
   overflow: visible;
   transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
-/* focus-within 时显示 primary ring，替代厚重阴影，更轻盈 */
+/* focus-within 时仅轻微加深边框，不显示蓝色 ring，保持简洁 */
 .composer-shell:focus-within {
-  border-color: color-mix(in oklch, var(--primary) 40%, var(--border));
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 18%, transparent);
+  border-color: var(--border-strong);
 }
 /* 附件列表 */
 .attachment-list {
@@ -1810,7 +1809,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-2) var(--space-1) var(--space-2) 0;
+  /* 左侧 padding 与 tools-list-title 对齐，使副标题与下方"日常流程"左对齐 */
+  padding: var(--space-2) var(--space-1) var(--space-2) var(--space-2);
   border-bottom: 0;
 }
 .tools-title { font-size: var(--text-sm); font-weight: 600; }
@@ -1847,6 +1847,9 @@ body {
   padding: var(--space-2) var(--space-3) var(--space-2) 0;
   overflow-y: auto;
   background: transparent;
+  /* 默认只展示约 2 个工具卡片，其余需要下滑查看 */
+  max-height: 220px;
+  flex-shrink: 0;
 }
 .tools-list-title {
   font-size: var(--text-xs);

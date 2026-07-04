@@ -890,11 +890,11 @@ export default function App() {
   const send = async (text?: string) => {
     const rawMsg = (text ?? input).trim();
     if (!rawMsg) return;
-    if (busy) { toast("Pi 思考中，请等待当前任务完成或中断后再发送", "info"); return; }
-    if (!ready) { toast("Pi 未连接，请稍候", "info"); return; }
+    if (busy) { toast("物流助理思考中，请等待当前任务完成或中断后再发送", "info"); return; }
+    if (!ready) { toast("物流助理未连接，请稍候", "info"); return; }
     // 预览模式下若 pi 正忙，提示用户：续聊需要重启 pi 会中断当前输出
     if (previewPath && previewPath !== sessionFileRef.current && busy) {
-      toast("Pi 正在输出，续聊历史会话会中断当前任务，请先等待或中断", "info"); return;
+      toast("物流助理正在输出，续聊历史会话会中断当前任务，请先等待或中断", "info"); return;
     }
     // 若处于预览模式（浏览的历史会话 != 当前活动会话），发消息前先真正切换。
     // 关键：用 restart_pi --session <path> 重启 pi 进程来续聊历史会话。
@@ -1211,7 +1211,7 @@ export default function App() {
                   )}
                   {turn.assistantMsgs.length === 0 && turn.status === "streaming" ? (
                     <div className="msg assistant">
-                      <div className="msg-author"><span className="avatar">🤖</span><span className="author-name">Pi</span></div>
+                      <div className="msg-author"><span className="avatar">📦</span><span className="author-name">物流助理</span></div>
                       <div className="msg-content">
                         <div className="msg-bubble assistant-bubble">
                           <span className="thinking-dots"><span className="dot-pulse" /><span className="dot-pulse" /><span className="dot-pulse" /></span>
@@ -1220,7 +1220,7 @@ export default function App() {
                     </div>
                   ) : turn.assistantMsgs.map((msg) => (
                     <div key={msg.id} className={`msg assistant ${msg.streaming ? "streaming" : ""}`}>
-                      <div className="msg-author"><span className="avatar">🤖</span><span className="author-name">Pi</span></div>
+                      <div className="msg-author"><span className="avatar">📦</span><span className="author-name">物流助理</span></div>
                       <div className="msg-content">
                         {msg.thinking && (
                           <details className="reasoning">
