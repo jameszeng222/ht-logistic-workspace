@@ -1379,10 +1379,6 @@ export default function App() {
                 document.body
               )}
             </div>
-            <div className="composer-hint">
-              <span className="kbd">Enter</span> 发送 · <span className="kbd">Shift+Enter</span> 换行 · <span className="kbd">Esc</span> 清空 · 物流工具在下方执行，结果可交给助手解读
-              {busy && <span className="hint-busy"> · Pi 思考中…</span>}
-            </div>
           </div>
           <section className="tool-workbench">
             <ToolsPanel onSendToAssistant={(message) => send(message)} />

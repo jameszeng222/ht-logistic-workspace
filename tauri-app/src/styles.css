@@ -146,7 +146,7 @@
 
   /* 布局 */
   --header-h: 56px;
-  --sidebar-w: 320px;
+  --sidebar-w: 300px;
   --files-w: 326px;
   --content-max: 900px;
 }
@@ -499,10 +499,11 @@ body {
   overflow: hidden;
   display: flex;
   background: transparent;
-  border-top: 0;
-  padding: 0 var(--space-6) var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+  padding: var(--space-3) var(--space-6) var(--space-4);
   max-height: 420px;
 }
+/* 工具面板：去白背景，与主背景融合。仅用细分隔线区隔，无卡片边框/阴影。 */
 .tool-workbench .tools-panel {
   grid-column: auto;
   width: 100%;
@@ -510,21 +511,21 @@ body {
   min-width: 0;
   max-width: var(--content-max);
   margin: 0 auto;
-  background: var(--surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
 }
 .tool-workbench .tools-body {
   flex-direction: row;
 }
 .tool-workbench .tools-list {
-  width: 260px;
+  width: 240px;
   max-height: 340px;
   overflow-y: auto;
-  border-right: 0;
+  border-right: 1px solid var(--border-subtle);
   border-bottom: 0;
-  background: color-mix(in oklch, var(--surface-hover) 45%, transparent);
+  background: transparent;
 }
 .tool-workbench .tools-detail {
   min-height: 0;
@@ -1751,13 +1752,13 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg);
+  background: transparent;
 }
 .tools-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-1) var(--space-2) 0;
   border-bottom: 0;
 }
 .tools-title { font-size: var(--text-sm); font-weight: 600; }
@@ -1773,7 +1774,7 @@ body {
   font-size: var(--text-xs);
   padding: 4px 10px;
   border-radius: var(--radius-full);
-  background: var(--surface);
+  background: transparent;
   border: 1px solid var(--border-subtle);
   color: var(--fg-muted);
 }
@@ -1783,24 +1784,25 @@ body {
 .tools-banner {
   padding: var(--space-2) var(--space-4);
   font-size: var(--text-xs);
-  background: rgba(220, 60, 60, 0.1);
+  background: color-mix(in oklch, var(--danger) 8%, transparent);
   color: var(--danger);
-  border-bottom: 1px solid rgba(220, 60, 60, 0.2);
+  border-bottom: 1px solid color-mix(in oklch, var(--danger) 20%, transparent);
 }
 .tools-body { flex: 1; display: flex; overflow: hidden; }
 .tools-list {
-  width: 280px;
-  border-right: 0;
-  padding: var(--space-2);
+  width: 240px;
+  border-right: 1px solid var(--border-subtle);
+  padding: var(--space-2) var(--space-3) var(--space-2) 0;
   overflow-y: auto;
-  background: color-mix(in oklch, var(--surface-hover) 45%, transparent);
+  background: transparent;
 }
 .tools-list-title {
   font-size: var(--text-xs);
-  color: var(--fg-muted);
+  color: var(--fg-subtle);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin-bottom: var(--space-2);
+  padding: 0 var(--space-2);
 }
 .tools-empty {
   padding: var(--space-4);
@@ -1808,42 +1810,43 @@ body {
   color: var(--fg-muted);
   font-size: var(--text-sm);
 }
+/* 工具卡片：去白背景，用 hover/active 的柔和底色区分，无粗边框 */
 .tools-panel .tool-card {
   display: block;
   width: 100%;
   text-align: left;
   padding: var(--space-3);
-  margin-bottom: var(--space-2);
-  background: var(--surface);
-  border: 1px solid var(--border-subtle);
+  margin-bottom: var(--space-1);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: all 0.15s var(--ease);
   color: var(--fg);
 }
-.tools-panel .tool-card:hover { border-color: var(--primary); }
+.tools-panel .tool-card:hover { background: var(--surface-hover); border-color: transparent; }
 .tools-panel .tool-card.active {
-  border-color: var(--primary);
+  border-color: transparent;
   background: var(--primary-soft);
 }
 .tools-panel .tool-card-name { font-weight: 600; font-size: var(--text-sm); margin-bottom: 4px; }
 .tools-panel .tool-card-desc { font-size: var(--text-xs); color: var(--fg-muted); line-height: 1.4; margin-bottom: var(--space-2); }
 .tools-panel .tool-card-meta { display: flex; gap: var(--space-2); font-size: 10px; color: var(--fg-subtle); align-items: center; }
-.tools-detail { flex: 1; padding: var(--space-5); overflow-y: auto; }
+.tools-detail { flex: 1; padding: var(--space-3) var(--space-5); overflow-y: auto; }
 .tool-detail-title { font-size: var(--text-md); font-weight: 600; margin-bottom: var(--space-1); }
 .tool-detail-desc { font-size: var(--text-sm); color: var(--fg-muted); margin-bottom: var(--space-4); line-height: 1.5; }
 
-/* 选文件区（点击弹原生对话框，比拖拽可靠） */
+/* 选文件区：去白背景，仅虚线边框，hover 时柔和底色 */
 .file-pick-zone {
   border: 1px dashed var(--border);
   border-radius: var(--radius);
-  padding: var(--space-4);
+  padding: var(--space-5);
   text-align: center;
   cursor: pointer;
   transition: all 0.15s var(--ease);
-  background: var(--surface);
+  background: transparent;
 }
-.file-pick-zone:hover { border-color: var(--primary); background: var(--surface-hover); }
+.file-pick-zone:hover { border-color: var(--primary); background: var(--primary-soft); }
 .file-pick-icon { font-size: 32px; margin-bottom: var(--space-2); }
 .file-pick-empty { color: var(--fg-muted); font-size: var(--text-sm); }
 .file-pick-accept { font-size: var(--text-xs); color: var(--fg-subtle); margin-top: var(--space-1); }
@@ -1889,7 +1892,8 @@ body {
   word-break: break-all;
   margin-bottom: var(--space-2);
   padding: var(--space-2);
-  background: var(--surface);
+  background: color-mix(in oklch, var(--success) 6%, transparent);
+  border: 1px solid color-mix(in oklch, var(--success) 15%, transparent);
   border-radius: var(--radius-sm);
 }
 .tool-result-json {
