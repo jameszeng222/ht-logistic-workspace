@@ -145,7 +145,7 @@
   --dur-slow: 0.28s;
 
   /* 布局 */
-  --header-h: 56px;
+  --header-h: 60px;
   --sidebar-w: 300px;
   --files-w: 326px;
   --content-max: 900px;
@@ -538,7 +538,7 @@ body {
   border-left: 0;
   display: flex;
 }
-.messages { min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.messages { min-height: 0; overflow-y: auto; overflow-x: hidden; position: relative; }
 .messages-inner {
   max-width: var(--content-max); margin: 0 auto;
   padding: var(--space-5) 0 var(--space-6);
@@ -575,9 +575,9 @@ body {
   font-weight: 700;
   letter-spacing: 0.06em;
 }
-.empty-icon { font-size: 44px; margin-bottom: var(--space-4); }
+.empty-icon { font-size: 48px; margin-bottom: var(--space-3); opacity: 0.9; }
 .empty-state h3 {
-  font-size: 40px; font-weight: 700; margin-bottom: var(--space-2);
+  font-size: 28px; font-weight: 700; margin-bottom: var(--space-2);
   letter-spacing: 0;
 }
 .empty-state p {
@@ -586,18 +586,46 @@ body {
   max-width: 620px;
   margin: 0 auto;
 }
+.empty-suggestions {
+  display: flex; flex-wrap: wrap; gap: var(--space-2);
+  justify-content: center; margin-top: var(--space-5);
+  max-width: 620px; margin-left: auto; margin-right: auto;
+}
+.suggestion-chip {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-sm); color: var(--fg);
+  cursor: pointer; font-family: var(--font-sans);
+  transition: all var(--dur-fast) var(--ease);
+}
+.suggestion-chip:hover {
+  border-color: var(--primary); background: var(--primary-soft); color: var(--primary);
+}
 
 /* Turn */
 .turn { display: flex; flex-direction: column; gap: var(--space-4); }
 
-/* 消息 */
-.msg { display: flex; gap: 0; align-items: flex-start; }
+/* 消息：AI 左侧带头像/标签，用户右侧无头像 */
+.msg { display: flex; gap: var(--space-3); align-items: flex-start; }
 .msg.user { flex-direction: row-reverse; }
+.msg-author {
+  display: inline-flex; align-items: center; gap: var(--space-2);
+  padding-top: var(--space-1);
+  font-size: var(--text-xs); color: var(--fg-muted);
+  flex-shrink: 0; width: 44px; flex-direction: column; align-items: center; gap: 2px;
+}
+.msg-author .avatar { font-size: 20px; line-height: 1; }
+.msg-author .author-name { font-size: 10px; font-weight: 500; }
 .msg-content {
   display: flex; flex-direction: column; gap: var(--space-2);
-  min-width: 0; max-width: 100%;
+  min-width: 0;
+  max-width: calc(100% - 44px - var(--space-3));
 }
 .msg.user .msg-content { align-items: flex-end; }
+/* 用户气泡限宽 75%，避免长消息撑满整行 */
+.msg.user .msg-content { max-width: 75%; }
 .msg-bubble {
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius);
@@ -639,17 +667,28 @@ body {
   40% { opacity: 1; transform: scale(1); }
 }
 
-/* 思维链折叠 */
+/* 思维链折叠：左侧细竖线 + 自定义 chevron，类 Claude reasoning 块 */
 .reasoning {
   background: transparent; border: 0;
-  border-radius: var(--radius); padding: var(--space-1) 0;
+  border-left: 2px solid var(--border-subtle);
+  border-radius: 0; padding: var(--space-1) var(--space-3);
   font-size: var(--text-sm);
+  margin-left: 2px;
 }
 .reasoning summary {
   cursor: pointer; color: var(--fg-muted); user-select: none;
   font-size: var(--text-xs); font-weight: 500;
+  display: inline-flex; align-items: center; gap: var(--space-2);
+  list-style: none;
 }
+.reasoning summary::-webkit-details-marker { display: none; }
 .reasoning summary:hover { color: var(--fg); }
+.reasoning-chevron {
+  display: inline-block; font-size: 10px;
+  transition: transform var(--dur-fast) var(--ease);
+}
+.reasoning[open] .reasoning-chevron { transform: rotate(90deg); }
+.reasoning-count { color: var(--fg-subtle); font-weight: 400; }
 .reasoning-body {
   margin-top: var(--space-2); padding-top: var(--space-2);
   border-top: 0;
@@ -657,18 +696,18 @@ body {
   line-height: var(--leading-normal); font-size: var(--text-sm);
 }
 
-/* ============ 工具卡片 ============ */
+/* ============ 工具卡片：去白底，与整体风格一致 ============ */
 .tool-list { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-1); }
 .tool-card {
-  background: var(--surface);
+  background: transparent;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   overflow: hidden;
-  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
 }
 .tool-card.running { border-color: color-mix(in oklch, var(--warning) 45%, var(--border)); }
 .tool-card.error { border-color: color-mix(in oklch, var(--danger) 45%, var(--border)); }
-.tool-card.expanded { background: var(--surface-hover); box-shadow: var(--shadow-xs); }
+.tool-card.expanded { background: var(--surface-hover); }
 .tool-head {
   display: flex; align-items: center; gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
@@ -712,7 +751,7 @@ body {
 
 /* ============ 滚动按钮 ============ */
 .scroll-btn {
-  position: absolute; bottom: 140px; right: var(--space-6);
+  position: absolute; bottom: var(--space-4); right: var(--space-6);
   width: 38px; height: 38px;
   border-radius: var(--radius-full);
   background: var(--surface);
@@ -761,8 +800,14 @@ body {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-sm);
   overflow: visible;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+/* focus-within 时显示 primary ring，替代厚重阴影，更轻盈 */
+.composer-shell:focus-within {
+  border-color: color-mix(in oklch, var(--primary) 40%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 18%, transparent);
 }
 /* 附件列表 */
 .attachment-list {
@@ -800,10 +845,17 @@ body {
 .composer-toolbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--space-2);
   padding: var(--space-2);
   border-bottom: 0;
-  overflow-x: auto;
+  flex-wrap: wrap;
+}
+.composer-pill-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
 }
 .composer-pill {
   display: inline-flex;

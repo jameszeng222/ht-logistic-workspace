@@ -846,7 +846,8 @@ export default function App() {
     localStorage.setItem("pi-workdir", trimmed);
   }, []);
   const applyWorkdir = useCallback(async (dir: string) => {
-    const trimmed = dir.trim();
+    // 去掉末尾路径分隔符，避免 split(/[\\/]/).pop() 返回空字符串
+    const trimmed = dir.trim().replace(/[\\/]+$/, "");
     if (busy) { toast("请等待当前任务完成再切换工作目录", "info"); return; }
     try {
       setReady(false);
@@ -858,12 +859,15 @@ export default function App() {
       setPreviewPath(null);
       setReady(true);
       toast(trimmed ? `工作目录已切换：${trimmed}` : "已清除工作目录（沿用默认）", "success");
-      refreshState(); refreshSessions();
+      await refreshState();
+      await refreshSessions();
+      // 重启后 pi 可能自动加载了某个会话，读取其历史确保 UI 与 pi 实际上下文一致
+      await loadHistory();
     } catch (e) {
       setReady(true);
       toast(`切换工作目录失败: ${e}`, "error");
     }
-  }, [busy, toast, setWorkdirPersist, refreshState, refreshSessions]);
+  }, [busy, toast, setWorkdirPersist, refreshState, refreshSessions, loadHistory]);
   const pickWorkdir = useCallback(async () => {
     try {
       const selected = await openDialog({ directory: true, multiple: false });
@@ -885,7 +889,13 @@ export default function App() {
 
   const send = async (text?: string) => {
     const rawMsg = (text ?? input).trim();
-    if (!rawMsg || busy || !ready) return;
+    if (!rawMsg) return;
+    if (busy) { toast("Pi 思考中，请等待当前任务完成或中断后再发送", "info"); return; }
+    if (!ready) { toast("Pi 未连接，请稍候", "info"); return; }
+    // 预览模式下若 pi 正忙，提示用户：续聊需要重启 pi 会中断当前输出
+    if (previewPath && previewPath !== sessionFileRef.current && busy) {
+      toast("Pi 正在输出，续聊历史会话会中断当前任务，请先等待或中断", "info"); return;
+    }
     // 若处于预览模式（浏览的历史会话 != 当前活动会话），发消息前先真正切换。
     // 关键：用 restart_pi --session <path> 重启 pi 进程来续聊历史会话。
     // 之所以不用 switch_session RPC：pi RPC 进程与活动会话强绑定，
@@ -1006,7 +1016,8 @@ export default function App() {
           <span className="dot" />
           {ready ? (busy ? "思考中" : "就绪") : "未连接"}
         </span>
-        {/* 工作目录：显眼入口，点击直接选目录并应用。显示当前工作目录末段名。 */}
+        <div className="header-spacer" />
+        {/* 工作目录：右移至 spacer 之后，与日志/主题一组，左侧保持品牌+状态更干净 */}
         <button
           className="icon-btn workdir-btn"
           onClick={async () => {
@@ -1019,9 +1030,16 @@ export default function App() {
           }}
           title={workdir ? `工作目录：${workdir}（点击切换）` : "设置工作目录（输入输出文件都存这里）"}
         >
-          📁 {workdir ? (workdir.split(/[\\/]/).pop() || workdir) : "设置工作目录"}
+          📁 {workdir ? (workdir.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || workdir) : "设置工作目录"}
         </button>
-        <div className="header-spacer" />
+        {/* 主题切换 */}
+        <button
+          className="icon-btn"
+          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+          title={theme === "dark" ? "切换到浅色" : "切换到深色"}
+        >
+          {theme === "dark" ? "☀️" : "🌙"}
+        </button>
         {/* 调试日志 */}
         <button className={`icon-btn log-toggle ${stderrCount > 0 ? "has-warn" : ""}`} onClick={() => setShowLogViewer(true)} title="调试日志">
           📋
@@ -1175,8 +1193,14 @@ export default function App() {
             <div className="messages-inner">
               {turns.length === 0 ? (
                 <div className="empty-state">
+                  <div className="empty-icon">📦</div>
                   <h3>Logistic Workspace</h3>
-                  <p>面向日常单据制作和物流数据分析的本地 AI 工作台。选择下方工具处理 Excel/PDF，或直接描述你要完成的任务。</p>
+                  <p>面向日常单据制作和物流数据分析的本地 AI 工作台。</p>
+                  <div className="empty-suggestions">
+                    <button className="suggestion-chip" onClick={() => { setInput("帮我分析这个 Excel 的关键数据和异常点"); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer-shell textarea")?.focus(), 0); }}>📊 分析 Excel 关键数据</button>
+                    <button className="suggestion-chip" onClick={() => { setInput("根据这份提单生成装箱单"); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer-shell textarea")?.focus(), 0); }}>📄 根据提单生成装箱单</button>
+                    <button className="suggestion-chip" onClick={() => { setInput("汇总这批货物的运费和时效"); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer-shell textarea")?.focus(), 0); }}>🚚 汇总运费和时效</button>
+                  </div>
                 </div>
               ) : turns.map((turn) => (
                 <div key={turn.id} className="turn">
@@ -1187,6 +1211,7 @@ export default function App() {
                   )}
                   {turn.assistantMsgs.length === 0 && turn.status === "streaming" ? (
                     <div className="msg assistant">
+                      <div className="msg-author"><span className="avatar">🤖</span><span className="author-name">Pi</span></div>
                       <div className="msg-content">
                         <div className="msg-bubble assistant-bubble">
                           <span className="thinking-dots"><span className="dot-pulse" /><span className="dot-pulse" /><span className="dot-pulse" /></span>
@@ -1195,10 +1220,11 @@ export default function App() {
                     </div>
                   ) : turn.assistantMsgs.map((msg) => (
                     <div key={msg.id} className={`msg assistant ${msg.streaming ? "streaming" : ""}`}>
+                      <div className="msg-author"><span className="avatar">🤖</span><span className="author-name">Pi</span></div>
                       <div className="msg-content">
                         {msg.thinking && (
                           <details className="reasoning">
-                            <summary>思维链 ({msg.thinking.length} 字)</summary>
+                            <summary><span className="reasoning-chevron">▸</span>思维链<span className="reasoning-count">{msg.thinking.length} 字</span></summary>
                             <div className="reasoning-body">{msg.thinking}</div>
                           </details>
                         )}
@@ -1219,9 +1245,8 @@ export default function App() {
                 </div>
               ))}
             </div>
+            <button className={`scroll-btn ${showScrollBtn ? "visible" : ""}`} onClick={() => scrollToBottom(true)} title="回到底部">↓</button>
           </div>
-
-          <button className={`scroll-btn ${showScrollBtn ? "visible" : ""}`} onClick={() => scrollToBottom(true)} title="回到底部">↓</button>
 
           {/* 输入框 */}
           <div
@@ -1283,43 +1308,47 @@ export default function App() {
                   <button className="send-btn" onClick={() => send()} disabled={!inputCanSend} title="发送">发送</button>
                 )}
               </div>
-              {/* 工具栏移到输入框下方 */}
+              {/* 工具栏：左侧操作组（附件/模型/权限），右侧快捷 prompt 组（单据/分析/工具），中间 spacer 分隔 */}
               <div className="composer-toolbar">
-                <button
-                  type="button"
-                  className="composer-pill"
-                  onClick={pickAttachments}
-                  title="添加附件（Excel/Word/PDF 等）"
-                >
-                  📎 附件
-                </button>
-                <button
-                  ref={modelBtnRef}
-                  type="button"
-                  className="composer-pill"
-                  onClick={() => showModelDropdown ? setShowModelDropdown(false) : (refreshModels(), openDropdown(modelBtnRef.current, "model"))}
-                  title="切换模型"
-                >
-                  {modelName} ▾
-                </button>
-                <button
-                  ref={permBtnRef}
-                  type="button"
-                  className="composer-pill"
-                  onClick={() => showPermissionDropdown ? setShowPermissionDropdown(false) : openDropdown(permBtnRef.current, "perm")}
-                  title="切换工具权限模式"
-                >
-                  {permissionModeLabel} ▾
-                </button>
-                <button type="button" className="composer-pill" onClick={() => setInput("帮我根据选中的物流文件制作发票和箱单，并检查缺失字段。")}>
-                  单据制作
-                </button>
-                <button type="button" className="composer-pill" onClick={() => setInput("帮我分析这个物流 Excel，输出异常、趋势和下一步建议。")}>
-                  数据分析
-                </button>
-                <button type="button" className="composer-pill" onClick={() => { setInput("/"); setShowCmdPalette(true); }}>
-                  工具调用
-                </button>
+                <div className="composer-pill-group">
+                  <button
+                    type="button"
+                    className="composer-pill"
+                    onClick={pickAttachments}
+                    title="添加附件（Excel/Word/PDF 等）"
+                  >
+                    📎 附件
+                  </button>
+                  <button
+                    ref={modelBtnRef}
+                    type="button"
+                    className="composer-pill"
+                    onClick={() => showModelDropdown ? setShowModelDropdown(false) : (refreshModels(), openDropdown(modelBtnRef.current, "model"))}
+                    title="切换模型"
+                  >
+                    {modelName} ▾
+                  </button>
+                  <button
+                    ref={permBtnRef}
+                    type="button"
+                    className="composer-pill"
+                    onClick={() => showPermissionDropdown ? setShowPermissionDropdown(false) : openDropdown(permBtnRef.current, "perm")}
+                    title="切换工具权限模式"
+                  >
+                    {permissionModeLabel} ▾
+                  </button>
+                </div>
+                <div className="composer-pill-group">
+                  <button type="button" className="composer-pill" onClick={() => setInput("帮我根据选中的物流文件制作发票和箱单，并检查缺失字段。")}>
+                    单据制作
+                  </button>
+                  <button type="button" className="composer-pill" onClick={() => setInput("帮我分析这个物流 Excel，输出异常、趋势和下一步建议。")}>
+                    数据分析
+                  </button>
+                  <button type="button" className="composer-pill" onClick={() => { setInput("/"); setShowCmdPalette(true); }}>
+                    工具调用
+                  </button>
+                </div>
               </div>
               {/* 下拉框用 Portal 渲染到 body，脱离所有父容器 overflow 裁切 */}
               {(showModelDropdown || showPermissionDropdown) && dropdownPos && createPortal(
