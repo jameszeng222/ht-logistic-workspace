@@ -7,9 +7,11 @@
 // 3. 输入框无法发送 —— StrictMode 副作用消除
 
 import { useEffect, useState, useCallback, useRef, useMemo, type DragEvent as ReactDragEvent } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { PiEvent } from "./pi-client";
 import { Markdown } from "./Markdown";
 import { CommandPalette } from "./CommandPalette";
@@ -89,8 +91,22 @@ export default function App() {
   const [currentModel, setCurrentModel] = useState<ModelInfo | null>(null);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [showPermissionDropdown, setShowPermissionDropdown] = useState(false);
+  // 下拉框定位：用 fixed + Portal 渲染到 body，彻底脱离所有父容器 overflow 裁切
+  const modelBtnRef = useRef<HTMLButtonElement>(null);
+  const permBtnRef = useRef<HTMLButtonElement>(null);
+  const [dropdownPos, setDropdownPos] = useState<{ left: number; bottom: number; width: number } | null>(null);
+  // 仅做定位与开关状态切换；模型列表刷新在按钮 onClick 中单独调用，避免依赖 refreshModels。
+  const openDropdown = useCallback((btn: HTMLButtonElement | null, which: "model" | "perm") => {
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    setDropdownPos({ left: rect.left, bottom: window.innerHeight - rect.top + 4, width: Math.max(rect.width, 260) });
+    if (which === "model") { setShowModelDropdown(true); setShowPermissionDropdown(false); }
+    else { setShowPermissionDropdown(true); setShowModelDropdown(false); }
+  }, []);
   // 拖拽文件到聊天框：高亮提示 + drop 时把文件绝对路径插入输入框
   const [dragOver, setDragOver] = useState(false);
+  // 附件：选中的文件绝对路径列表，发送时拼到消息里
+  const [attachments, setAttachments] = useState<string[]>([]);
 
   // 状态 & 统计
   const [piState, setPiState] = useState<PiState | null>(null);
@@ -113,6 +129,13 @@ export default function App() {
     return localStorage.getItem("pi-auto-confirm") === "true" ? "trust" : "workspace";
   });
   const permissionModeLabel = permissionMode === "cautious" ? "审慎模式" : permissionMode === "workspace" ? "工作台模式" : "全信任模式";
+  // 工作目录：用户设定的默认工作目录，启动时传给 pi 子进程作为 cwd。
+  // 空=不设定（沿用 Tauri 进程 cwd）。持久化在 localStorage(key: pi-workdir)。
+  // 切换工作目录会重启 pi 进程；新建会话的 --cwd-- 目录编码也基于此路径，
+  // 这样"输入和输出的文件都在工作目录"自然成立，文件浏览器也会默认定位到这里。
+  const [workdir, setWorkdir] = useState<string>(() => localStorage.getItem("pi-workdir") || "");
+  const workdirRef = useRef(workdir);
+  workdirRef.current = workdir;
   const [showExtManager, setShowExtManager] = useState(false);
   // 会话分组折叠状态（key=项目名，value=是否展开）
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => {
@@ -578,7 +601,11 @@ export default function App() {
         if (cancelled) { fn1(); fn2(); return; }
         unlisten = fn1; unlistenStderr = fn2;
         addLogRef.current("event", "app_init · 正在启动 Pi 进程…");
-        await invoke("start_pi");
+        // 启动时若已设定工作目录，通过 restart_pi 传 cwd 给 pi 子进程，
+        // 使 pi 在该目录下读写文件、新建会话也基于此 cwd 编码目录名。
+        // restart_pi 内部会先 stop（空操作）再 spawn，等价于带 cwd 的 start_pi。
+        const initCwd = workdirRef.current.trim() || null;
+        await invoke("restart_pi", { cwd: initCwd, sessionPath: null });
         if (cancelled) return;
         setReady(true);
         toastRef.current("已连接 Pi", "success");
@@ -759,7 +786,7 @@ export default function App() {
   }, [toast]);
 
   // ====== 拖拽文件到聊天框 ======
-  // 从右侧文件浏览器拖入文件时，把绝对路径拼到输入框，并附带分析提示
+  // 从右侧文件浏览器拖入文件时，把绝对路径作为附件添加
   const handleFileDrop = useCallback((e: ReactDragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -769,14 +796,81 @@ export default function App() {
     if (!path || !path.trim()) return;
     const trimmed = path.trim();
     const fileName = trimmed.split(/[\\/]/).pop() || trimmed;
-    // 拼接：如果输入框已有内容，换行追加；否则直接填入分析提示
-    const analyzeText = `请分析文件：${trimmed}\n（${fileName}）`;
-    setInput((prev) => (prev.trim() ? `${prev}\n${analyzeText}` : analyzeText));
-    toast(`已添加文件：${fileName}`, "success");
-    setTimeout(() => {
-      const ta = document.querySelector(".composer-inner textarea") as HTMLTextAreaElement;
-      if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
-    }, 0);
+    setAttachments((prev) => prev.includes(trimmed) ? prev : [...prev, trimmed]);
+    toast(`已添加附件：${fileName}`, "success");
+  }, [toast]);
+
+  // ====== 附件选择（Tauri 原生对话框） ======
+  const pickAttachments = useCallback(async () => {
+    try {
+      const selected = await openDialog({
+        multiple: true,
+        filters: [
+          { name: "文档", extensions: ["xlsx", "xls", "csv", "doc", "docx", "pdf", "txt", "md", "json", "png", "jpg", "jpeg"] },
+        ],
+      });
+      if (!selected) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      setAttachments((prev) => {
+        const next = [...prev];
+        for (const p of paths) { if (!next.includes(p)) next.push(p); }
+        return next;
+      });
+      toast(`已添加 ${paths.length} 个附件`, "success");
+    } catch (e) {
+      toast(`选择文件失败：${e}`, "error");
+    }
+  }, [toast]);
+
+  const removeAttachment = useCallback((path: string) => {
+    setAttachments((prev) => prev.filter((p) => p !== path));
+  }, []);
+
+  // ====== 从文件浏览器一键加入聊天分析 ======
+  // 把文件加到附件列表，并填入默认分析 prompt（仅在输入框为空时填入，避免覆盖正在编辑的内容）
+  const pickFileFromBrowser = useCallback((path: string) => {
+    const trimmed = path.trim();
+    if (!trimmed) return;
+    const fileName = trimmed.split(/[\\/]/).pop() || trimmed;
+    setAttachments((prev) => prev.includes(trimmed) ? prev : [...prev, trimmed]);
+    // 仅在输入框为空时填入默认 prompt，避免覆盖用户正在编辑的内容
+    setInput((prev) => prev.trim() ? prev : `请分析附件文件 ${fileName}，输出关键内容、异常点和下一步建议。`);
+    toast(`已加入附件：${fileName}（可直接发送）`, "success");
+  }, [toast]);
+
+  // ====== 工作目录设定 ======
+  // 持久化到 localStorage；applyWorkdir 会重启 pi 进程使新 cwd 生效。
+  const setWorkdirPersist = useCallback((dir: string) => {
+    const trimmed = dir.trim();
+    setWorkdir(trimmed);
+    localStorage.setItem("pi-workdir", trimmed);
+  }, []);
+  const applyWorkdir = useCallback(async (dir: string) => {
+    const trimmed = dir.trim();
+    if (busy) { toast("请等待当前任务完成再切换工作目录", "info"); return; }
+    try {
+      setReady(false);
+      // 重启 pi 并传入新 cwd；sessionPath=null 表示新建/沿用默认会话
+      await invoke("restart_pi", { cwd: trimmed || null, sessionPath: null });
+      setWorkdirPersist(trimmed);
+      setTurns([]); currentTurnId.current = null; currentMsgId.current = null;
+      pendingTextRef.current.clear(); pendingThinkingRef.current.clear();
+      setPreviewPath(null);
+      setReady(true);
+      toast(trimmed ? `工作目录已切换：${trimmed}` : "已清除工作目录（沿用默认）", "success");
+      refreshState(); refreshSessions();
+    } catch (e) {
+      setReady(true);
+      toast(`切换工作目录失败: ${e}`, "error");
+    }
+  }, [busy, toast, setWorkdirPersist, refreshState, refreshSessions]);
+  const pickWorkdir = useCallback(async () => {
+    try {
+      const selected = await openDialog({ directory: true, multiple: false });
+      if (!selected) return;
+      const dir = Array.isArray(selected) ? selected[0] : selected;
+      if (dir) setWorkdir(dir);
+    } catch (e) { toast(`选择目录失败: ${e}`, "error"); }
   }, [toast]);
 
   // ====== 命令面板补全 ======
@@ -793,14 +887,23 @@ export default function App() {
     const rawMsg = (text ?? input).trim();
     if (!rawMsg || busy || !ready) return;
     // 若处于预览模式（浏览的历史会话 != 当前活动会话），发消息前先真正切换。
-    // 这是 switch_session 推迟切换的兑现点：浏览不打断，发消息才切换。
+    // 关键：用 restart_pi --session <path> 重启 pi 进程来续聊历史会话。
+    // 之所以不用 switch_session RPC：pi RPC 进程与活动会话强绑定，
+    // switch_session 在 RPC 模式下不可靠（实际不切换或创建空分支），
+    // 导致"历史会话发消息后 AI 像失忆"——消息进了别的会话。
+    // pi --session <path> 是官方文档的续聊方式（pi.dev/docs/quickstart#continue-later），
+    // 重启进程虽然慢一点但 100% 可靠地加载历史会话上下文。
     if (previewPath && previewPath !== sessionFileRef.current) {
       try {
-        const data = await rpc({ type: "switch_session", sessionPath: previewPath } as any);
-        if (data?.cancelled) { toast("切换已被取消", "info"); return; }
-        setPreviewPath(null); // 切换成功后退出预览模式
+        setReady(false);
+        await invoke("restart_pi", { cwd: workdirRef.current.trim() || null, sessionPath: previewPath });
+        setPreviewPath(null);
+        setReady(true);
         await refreshState();
+        // 从 pi 重新读取该会话的消息（确保 UI 与 pi 实际加载的会话一致）
+        await loadHistory();
       } catch (e) {
+        setReady(true);
         toast(`切换会话失败: ${e}`, "error"); return;
       }
     }
@@ -817,13 +920,22 @@ export default function App() {
       // 注意：Pi 没有 /clear 命令（会话为 append-only，无法清空），曾把 /clear 当作新建会话，
       //       语义混淆，已移除。如需清空请用 /new 新建会话。
     }
+    // 拼接附件路径到消息（Pi 可读取这些路径的文件内容）
+    let finalMsg = rawMsg;
+    if (attachments.length > 0) {
+      const attachList = attachments.map((p) => {
+        const name = p.split(/[\\/]/).pop() || p;
+        return `- ${p}（${name}）`;
+      }).join("\n");
+      finalMsg = `${rawMsg}\n\n附件文件：\n${attachList}`;
+    }
     const turnId = `turn-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
     currentTurnId.current = turnId; currentMsgId.current = null;
     pendingTextRef.current.clear(); pendingThinkingRef.current.clear();
     setTurns((prev) => [...prev, { id: turnId, userMessage: rawMsg, assistantMsgs: [], toolCalls: {}, status: "streaming" }]);
-    setInput(""); setAutoFollow(true);
+    setInput(""); setAttachments([]); setAutoFollow(true);
     try {
-      await invoke("send_command", { command: { type: "prompt", message: rawMsg } });
+      await invoke("send_command", { command: { type: "prompt", message: finalMsg } });
     } catch (e) {
       toast(`发送失败: ${e}`, "error");
       setTurns((prev) => prev.map((t) => t.id === turnId ? { ...t, status: "done" } : t));
@@ -1107,6 +1219,27 @@ export default function App() {
               <CommandPalette input={input} index={cmdIndex} setIndex={setCmdIndex} onSelect={onCmdSelect} />
             )}
             <div className="composer-shell">
+              {attachments.length > 0 && (
+                <div className="attachment-list">
+                  {attachments.map((path) => {
+                    const name = path.split(/[\\/]/).pop() || path;
+                    const ext = name.split(".").pop()?.toLowerCase() || "";
+                    const icon = ["xlsx", "xls", "csv"].includes(ext) ? "📊" : ["doc", "docx"].includes(ext) ? "📝" : ext === "pdf" ? "📄" : ["png", "jpg", "jpeg"].includes(ext) ? "🖼️" : "📎";
+                    return (
+                      <div key={path} className="attachment-chip" title={path}>
+                        <span className="attachment-icon">{icon}</span>
+                        <span className="attachment-name">{name}</span>
+                        <button
+                          type="button"
+                          className="attachment-remove"
+                          onClick={() => removeAttachment(path)}
+                          title="移除"
+                        >×</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               <div className="composer-inner">
                 <textarea
                   value={input}
@@ -1137,79 +1270,32 @@ export default function App() {
               </div>
               {/* 工具栏移到输入框下方 */}
               <div className="composer-toolbar">
-                <div className="model-dropdown-wrap">
-                  <button
-                    type="button"
-                    className="composer-pill"
-                    onClick={() => { refreshModels(); setShowModelDropdown((v) => !v); }}
-                    title="切换模型"
-                  >
-                    {modelName} ▾
-                  </button>
-                  {showModelDropdown && (
-                    <>
-                      <div className="dropdown-overlay" onClick={() => setShowModelDropdown(false)} />
-                      <div className="model-dropdown">
-                        {models.length === 0 ? (
-                          <div className="model-dropdown-empty">未找到可用模型，请先配置 API Key</div>
-                        ) : models.map((m) => (
-                          <button
-                            type="button"
-                            key={`${m.provider}/${m.id}`}
-                            className={`model-dropdown-item ${currentModel?.id === m.id ? "active" : ""}`}
-                            onClick={(e) => { e.stopPropagation(); setModel(m.provider, m.id); setShowModelDropdown(false); }}
-                          >
-                            <span className="model-dropdown-name">{m.name}</span>
-                            <span className="model-dropdown-meta">
-                              {m.provider}{m.contextWindow ? ` · ${(m.contextWindow/1000).toFixed(0)}K` : ""}{m.reasoning ? " · 推理" : ""}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </div>
-                <div className="model-dropdown-wrap">
-                  <button
-                    type="button"
-                    className="composer-pill"
-                    onClick={() => setShowPermissionDropdown((v) => !v)}
-                    title="切换工具权限模式"
-                  >
-                    {permissionModeLabel} ▾
-                  </button>
-                  {showPermissionDropdown && (
-                    <>
-                      <div className="dropdown-overlay" onClick={() => setShowPermissionDropdown(false)} />
-                      <div className="model-dropdown">
-                        <button
-                          type="button"
-                          className={`model-dropdown-item ${permissionMode === "cautious" ? "active" : ""}`}
-                          onClick={(e) => { e.stopPropagation(); setPermissionModePersist("cautious"); setShowPermissionDropdown(false); }}
-                        >
-                          <span className="model-dropdown-name">审慎模式</span>
-                          <span className="model-dropdown-meta">生成文件前确认，删除/外部请求必须确认</span>
-                        </button>
-                        <button
-                          type="button"
-                          className={`model-dropdown-item ${permissionMode === "workspace" ? "active" : ""}`}
-                          onClick={(e) => { e.stopPropagation(); setPermissionModePersist("workspace"); setShowPermissionDropdown(false); }}
-                        >
-                          <span className="model-dropdown-name">工作台模式</span>
-                          <span className="model-dropdown-meta">本地生成和分析自动执行，删除等重要修改才弹窗</span>
-                        </button>
-                        <button
-                          type="button"
-                          className={`model-dropdown-item ${permissionMode === "trust" ? "active" : ""}`}
-                          onClick={(e) => { e.stopPropagation(); setPermissionModePersist("trust"); setShowPermissionDropdown(false); }}
-                        >
-                          <span className="model-dropdown-name">全信任模式</span>
-                          <span className="model-dropdown-meta">所有已授权工具自动执行</span>
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
+                <button
+                  type="button"
+                  className="composer-pill"
+                  onClick={pickAttachments}
+                  title="添加附件（Excel/Word/PDF 等）"
+                >
+                  📎 附件
+                </button>
+                <button
+                  ref={modelBtnRef}
+                  type="button"
+                  className="composer-pill"
+                  onClick={() => showModelDropdown ? setShowModelDropdown(false) : (refreshModels(), openDropdown(modelBtnRef.current, "model"))}
+                  title="切换模型"
+                >
+                  {modelName} ▾
+                </button>
+                <button
+                  ref={permBtnRef}
+                  type="button"
+                  className="composer-pill"
+                  onClick={() => showPermissionDropdown ? setShowPermissionDropdown(false) : openDropdown(permBtnRef.current, "perm")}
+                  title="切换工具权限模式"
+                >
+                  {permissionModeLabel} ▾
+                </button>
                 <button type="button" className="composer-pill" onClick={() => setInput("帮我根据选中的物流文件制作发票和箱单，并检查缺失字段。")}>
                   单据制作
                 </button>
@@ -1220,6 +1306,63 @@ export default function App() {
                   工具调用
                 </button>
               </div>
+              {/* 下拉框用 Portal 渲染到 body，脱离所有父容器 overflow 裁切 */}
+              {(showModelDropdown || showPermissionDropdown) && dropdownPos && createPortal(
+                <>
+                  <div className="dropdown-overlay" onClick={() => { setShowModelDropdown(false); setShowPermissionDropdown(false); }} />
+                  <div
+                    className="model-dropdown-portal"
+                    style={{ left: dropdownPos.left, bottom: dropdownPos.bottom, minWidth: dropdownPos.width }}
+                  >
+                    {showModelDropdown && (
+                      models.length === 0 ? (
+                        <div className="model-dropdown-empty">未找到可用模型，请先配置 API Key</div>
+                      ) : models.map((m) => (
+                        <button
+                          type="button"
+                          key={`${m.provider}/${m.id}`}
+                          className={`model-dropdown-item ${currentModel?.id === m.id ? "active" : ""}`}
+                          onClick={() => { setModel(m.provider, m.id); setShowModelDropdown(false); }}
+                        >
+                          <span className="model-dropdown-name">{m.name}</span>
+                          <span className="model-dropdown-meta">
+                            {m.provider}{m.contextWindow ? ` · ${(m.contextWindow/1000).toFixed(0)}K` : ""}{m.reasoning ? " · 推理" : ""}
+                          </span>
+                        </button>
+                      ))
+                    )}
+                    {showPermissionDropdown && (
+                      <>
+                        <button
+                          type="button"
+                          className={`model-dropdown-item ${permissionMode === "cautious" ? "active" : ""}`}
+                          onClick={() => { setPermissionModePersist("cautious"); setShowPermissionDropdown(false); }}
+                        >
+                          <span className="model-dropdown-name">审慎模式</span>
+                          <span className="model-dropdown-meta">生成文件前确认，删除/外部请求必须确认</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`model-dropdown-item ${permissionMode === "workspace" ? "active" : ""}`}
+                          onClick={() => { setPermissionModePersist("workspace"); setShowPermissionDropdown(false); }}
+                        >
+                          <span className="model-dropdown-name">工作台模式</span>
+                          <span className="model-dropdown-meta">本地生成和分析自动执行，删除等重要修改才弹窗</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`model-dropdown-item ${permissionMode === "trust" ? "active" : ""}`}
+                          onClick={() => { setPermissionModePersist("trust"); setShowPermissionDropdown(false); }}
+                        >
+                          <span className="model-dropdown-name">全信任模式</span>
+                          <span className="model-dropdown-meta">所有已授权工具自动执行</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </>,
+                document.body
+              )}
             </div>
             <div className="composer-hint">
               <span className="kbd">Enter</span> 发送 · <span className="kbd">Shift+Enter</span> 换行 · <span className="kbd">Esc</span> 清空 · 物流工具在下方执行，结果可交给助手解读
@@ -1231,7 +1374,7 @@ export default function App() {
           </section>
         </main>
         <aside className="workspace-files">
-          <FileBrowser currentCwd={currentSessionCwd} compact />
+          <FileBrowser currentCwd={workdir || currentSessionCwd} compact onPickFile={pickFileFromBrowser} />
         </aside>
       </div>
 
@@ -1298,6 +1441,26 @@ export default function App() {
         <div className="modal-overlay" onClick={() => setShowSettings(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 720 }}>
             <div className="modal-title">设置</div>
+
+            {/* 工作目录：pi 子进程的 cwd，输入输出文件都在这里 */}
+            <div className="settings-section">
+              <div className="settings-section-title">工作目录</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <input
+                  type="text"
+                  className="model-config-input"
+                  style={{ flex: 1, minWidth: 240 }}
+                  value={workdir}
+                  onChange={(e) => setWorkdir(e.target.value)}
+                  placeholder="例如 /Users/you/logistic-data（留空=沿用默认）"
+                />
+                <button type="button" className="btn-secondary" onClick={pickWorkdir}>浏览…</button>
+                <button type="button" className="btn-primary" onClick={() => applyWorkdir(workdir)}>应用并重启 Pi</button>
+              </div>
+              <div style={{ marginTop: 6, fontSize: 12, color: "var(--fg-muted)" }}>
+                设定后，pi 的工作目录固定为此处。新建会话的输入输出文件、文件浏览器默认定位都基于此目录，方便查找。切换会重启 pi 进程。
+              </div>
+            </div>
 
             {/* 模型配置（含 API Key 管理）*/}
             <div className="settings-section">

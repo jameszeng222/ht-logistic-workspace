@@ -92,11 +92,13 @@ function splitPath(path: string): { name: string; path: string }[] {
 interface FileBrowserProps {
   currentCwd?: string;
   compact?: boolean;
+  /** 点击"分析"按钮时回调，把文件绝对路径交给聊天框作为附件 */
+  onPickFile?: (path: string) => void;
 }
 
 type BrowserTab = "workspace" | "sessions";
 
-export function FileBrowser({ currentCwd, compact = false }: FileBrowserProps) {
+export function FileBrowser({ currentCwd, compact = false, onPickFile }: FileBrowserProps) {
   const [tab, setTab] = useState<BrowserTab>("workspace");
   const [agentPaths, setAgentPaths] = useState<AgentPaths | null>(null);
   const [entries, setEntries] = useState<DirEntry[]>([]);
@@ -332,6 +334,7 @@ export function FileBrowser({ currentCwd, compact = false }: FileBrowserProps) {
                 key={entry.path}
                 className={`fb-entry ${entry.is_dir ? "dir" : "file"} ${selectedEntry?.path === entry.path ? "selected" : ""}`}
                 onClick={() => handleEntryClick(entry)}
+                onDoubleClick={() => { if (!entry.is_dir && onPickFile) onPickFile(entry.path); }}
                 draggable={!entry.is_dir}
                 onDragStart={(e) => {
                   if (entry.is_dir) return;
@@ -340,7 +343,7 @@ export function FileBrowser({ currentCwd, compact = false }: FileBrowserProps) {
                   e.dataTransfer.setData("application/x-file-path", entry.path);
                   e.dataTransfer.effectAllowed = "copy";
                 }}
-                title={!entry.is_dir ? `${entry.name}（拖拽到聊天框分析）` : entry.name}
+                title={!entry.is_dir ? `${entry.name}（双击或拖拽到聊天框分析）` : entry.name}
               >
                 <span className="fb-col-name">
                   <span className="fb-entry-icon">{entry.is_dir ? "📁" : getFileIcon(entry.name)}</span>
@@ -349,6 +352,13 @@ export function FileBrowser({ currentCwd, compact = false }: FileBrowserProps) {
                 {!compact && <span className="fb-col-size">{formatSize(entry.size)}</span>}
                 {!compact && <span className="fb-col-modified">{formatDate(entry.modified)}</span>}
                 <span className="fb-col-actions" onClick={(e) => e.stopPropagation()}>
+                  {!entry.is_dir && onPickFile && (
+                    <button
+                      className="fb-action-btn fb-action-primary"
+                      onClick={() => onPickFile(entry.path)}
+                      title="加入聊天框让 AI 分析"
+                    >分析</button>
+                  )}
                   {!entry.is_dir && (
                     <button
                       className="fb-action-btn"

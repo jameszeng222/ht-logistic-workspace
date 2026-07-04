@@ -220,6 +220,40 @@ fn cwd_from_session(path: &std::path::Path) -> String {
 
 #[tauri::command]
 async fn start_pi(app: AppHandle, state: State<'_, PiState>) -> Result<(), String> {
+    spawn_pi(&app, state.inner(), None, None)
+}
+
+/// 用指定工作目录和/或会话文件重启 pi。
+/// - `cwd`: 工作目录绝对路径，None 时不设置（沿用 Tauri 进程 cwd）。
+/// - `session_path`: 会话文件绝对路径，对应 `pi --session <path>`，用于续聊历史会话。
+/// 流程：stop 现有 pi → 用新参数 spawn → 复用 start_pi 已有的 stdout/stderr 处理逻辑。
+#[tauri::command]
+async fn restart_pi(
+    app: AppHandle,
+    state: State<'_, PiState>,
+    cwd: Option<String>,
+    session_path: Option<String>,
+) -> Result<(), String> {
+    stop_pi_inner(state.inner());
+    spawn_pi(&app, state.inner(), cwd.as_deref(), session_path.as_deref())
+}
+
+/// stop_pi 的内部实现，操作 PiState 内部字段，供 stop_pi 命令和 restart_pi 复用。
+fn stop_pi_inner(state: &PiState) {
+    if let Some(mut child) = state.child.lock().unwrap().take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    *state.stdin.lock().unwrap() = None;
+    state.response_channels.lock().unwrap().clear();
+}
+
+fn spawn_pi(
+    app: &AppHandle,
+    state: &PiState,
+    cwd: Option<&str>,
+    session_path: Option<&str>,
+) -> Result<(), String> {
     if state.child.lock().unwrap().is_some() {
         return Ok(());
     }
@@ -247,9 +281,25 @@ async fn start_pi(app: AppHandle, state: State<'_, PiState>) -> Result<(), Strin
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    // 不用 --no-session，让 pi 持久化会话
+    // 工作目录：显式设置 pi 子进程的 cwd，使 pi 在该目录下读写文件、
+    // 新建会话的 --cwd-- 目录编码也基于此路径。
+    if let Some(dir) = cwd {
+        let p = std::path::Path::new(dir);
+        if !p.exists() {
+            return Err(format!("工作目录不存在：{dir}"));
+        }
+        cmd.current_dir(p);
+    }
+
+    // 不用 --no-session，让 pi 持久化会话。
+    // 若指定 session_path，传 --session <path> 让 pi 直接打开/续聊该会话文件，
+    // 这是官方文档的续聊方式（pi --session <path|id>），比 switch_session RPC 更可靠。
     let mut child = cmd
-        .args(["--mode", "rpc"])
+        .args(["--mode", "rpc"]);
+    if let Some(sp) = session_path {
+        child = child.args(["--session", sp]);
+    }
+    let mut child = child
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -957,12 +1007,7 @@ fn apply_model_config_sync() -> Result<String, String> {
 
 #[tauri::command]
 async fn stop_pi(state: State<'_, PiState>) -> Result<(), String> {
-    if let Some(mut child) = state.child.lock().unwrap().take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    *state.stdin.lock().unwrap() = None;
-    state.response_channels.lock().unwrap().clear();
+    stop_pi_inner(state.inner());
     Ok(())
 }
 
@@ -1301,7 +1346,7 @@ fn main() {
             ready: AtomicBool::new(false),
         })
         .invoke_handler(tauri::generate_handler![
-            start_pi, stop_pi, send_command, send_request, scan_sessions, delete_session, check_env_keys, read_text_file, write_text_file, read_session_history,
+            start_pi, stop_pi, restart_pi, send_command, send_request, scan_sessions, delete_session, check_env_keys, read_text_file, write_text_file, read_session_history,
             sidecar_url, sidecar_status, stop_sidecar,
             write_binary_file, open_in_explorer,
             list_extensions, install_extension, uninstall_extension,
