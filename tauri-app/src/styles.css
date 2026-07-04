@@ -720,7 +720,7 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg);
-  overflow: hidden;
+  overflow: visible;
 }
 .composer-toolbar {
   display: flex;

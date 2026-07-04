@@ -106,8 +106,8 @@ export default function App() {
   const [permissionMode, setPermissionMode] = useState<"cautious" | "workspace" | "trust">(() => {
     const saved = localStorage.getItem("pi-permission-mode");
     if (saved === "workspace" || saved === "trust" || saved === "cautious") return saved;
-    // 兼容旧 autoConfirm=true → trust；false → cautious
-    return localStorage.getItem("pi-auto-confirm") === "true" ? "trust" : "cautious";
+    // 兼容旧 autoConfirm=true → trust；默认工作台模式（推荐，弹窗最少且安全）
+    return localStorage.getItem("pi-auto-confirm") === "true" ? "trust" : "workspace";
   });
   const permissionModeLabel = permissionMode === "cautious" ? "审慎模式" : permissionMode === "workspace" ? "工作台模式" : "全信任模式";
   const cyclePermissionMode = useCallback(() => {
@@ -490,14 +490,17 @@ export default function App() {
   const handleUiRequest = useCallback((ev: any) => {
     const fireAndForget = ["notify","setStatus","setWidget","setTitle","setWorkingMessage","setWorkingVisible","setWorkingIndicator","setFooter","setTheme","setEditorText","setEditorComponent","pasteToEditor","setToolsExpanded"];
     if (fireAndForget.includes(ev.method)) return;
-    // 权限模式处理 confirm 类型请求
+    // 权限模式处理 confirm 类型请求（Pi 的 "Permission Required" / "Current agent requested" 等）
     if (ev.method === "confirm") {
-      const mode = localStorage.getItem("pi-permission-mode") || "cautious";
+      const mode = localStorage.getItem("pi-permission-mode") || "workspace";
       // 拼接 title + message 做关键字判断（中文 + 英文）
       const text = `${ev.title || ""} ${ev.message || ""}`.toLowerCase();
-      // 不可逆操作关键字：删除/移除/清空/卸载/格式化/delete/remove/rm/drop/truncate/uninstall
-      const destructiveKeywords = ["删除", "移除", "清空", "卸载", "格式化", "覆盖", "delete", "remove", "rm ", "drop ", "truncate", "uninstall", "overwrite"];
+      // 破坏性操作关键字：删除/移除/清空/卸载/格式化/覆盖 + delete/remove/rm/drop/truncate/uninstall/overwrite
+      const destructiveKeywords = ["删除", "移除", "清空", "卸载", "格式化", "覆盖", "delete", "remove", "rm ", "drop ", "truncate", "uninstall", "overwrite", "rmdir", "del "];
       const isDestructive = destructiveKeywords.some((k) => text.includes(k));
+      // 安全只读操作关键字：读取/查看/列表/查询/搜索/检查 + read/list/search/view/get/show/check/glob/grep
+      const safeKeywords = ["读取", "查看", "列表", "查询", "搜索", "检查", "显示", "获取", "read", "list", "search", "view", "show", "check", "glob", "grep", "ls ", "cat ", "head ", "tail ", "find ", "stat"];
+      const isSafe = safeKeywords.some((k) => text.includes(k));
       if (mode === "trust") {
         // 全信任：所有 confirm 自动放行
         invoke("send_command", { command: { type: "extension_ui_response", id: ev.id, confirmed: true, cancelled: false } });
@@ -508,7 +511,11 @@ export default function App() {
         invoke("send_command", { command: { type: "extension_ui_response", id: ev.id, confirmed: true, cancelled: false } });
         return;
       }
-      // cautious（审慎）：所有 confirm 都弹窗
+      if (mode === "cautious" && isSafe && !isDestructive) {
+        // 审慎：安全的只读操作也自动放行，只有写/修改/破坏性操作弹窗
+        invoke("send_command", { command: { type: "extension_ui_response", id: ev.id, confirmed: true, cancelled: false } });
+        return;
+      }
     }
     setUiRequest({ ev, inputValue: "", selectIndex: 0 });
   }, []);
