@@ -285,15 +285,24 @@ export function FileBrowser({ currentCwd, compact = false }: FileBrowserProps) {
       {/* 面包屑 */}
       {breadcrumbs.length > 0 && (
         <div className="fb-breadcrumbs">
-          {breadcrumbs.map((crumb, i) => (
-            <span key={i} className="fb-crumb-wrap">
-              {i > 0 && <span className="fb-crumb-sep">/</span>}
-              <button
-                className="fb-crumb"
-                onClick={() => navigateTo(crumb.path)}
-              >{crumb.name}</button>
-            </span>
-          ))}
+          {compact ? (
+            // compact 模式只显示最后一段目录名（缩写）
+            <button
+              className="fb-crumb"
+              onClick={() => navigateTo(currentPath)}
+              title={currentPath}
+            >{breadcrumbs[breadcrumbs.length - 1].name}</button>
+          ) : (
+            breadcrumbs.map((crumb, i) => (
+              <span key={i} className="fb-crumb-wrap">
+                {i > 0 && <span className="fb-crumb-sep">/</span>}
+                <button
+                  className="fb-crumb"
+                  onClick={() => navigateTo(crumb.path)}
+                >{crumb.name}</button>
+              </span>
+            ))
+          )}
         </div>
       )}
 

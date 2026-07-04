@@ -184,6 +184,39 @@ fn truncate_title(s: &str) -> String {
     if s.chars().count() <= 40 { s } else { s.chars().take(40).collect::<String>() + "…" }
 }
 
+/// 从会话 .jsonl 文件内容中读取真实 cwd。
+/// Pi 会在 jsonl 中写入带 cwd 字段的 entry（type=session/meta 等），优先取该值。
+/// 找不到时返回空串，由调用方回退到目录名解码。
+fn cwd_from_session(path: &std::path::Path) -> String {
+    let f = match std::fs::File::open(path) { Ok(f) => f, Err(_) => return String::new() };
+    let mut count = 0u32;
+    for line in std::io::BufRead::lines(std::io::BufReader::new(f)) {
+        let line = match line { Ok(l) => l, Err(_) => continue };
+        if line.trim().is_empty() { continue; }
+        let v: serde_json::Value = match serde_json::from_str(&line) { Ok(v) => v, Err(_) => continue };
+        // 只看前 20 行，避免大文件全读
+        count += 1;
+        if count > 20 { break; }
+        // 常见字段：顶层 cwd、session.cwd、meta.cwd
+        if let Some(c) = v.get("cwd").and_then(|c| c.as_str()) {
+            if !c.is_empty() { return c.to_string(); }
+        }
+        if let Some(c) = v.get("session").and_then(|s| s.get("cwd")).and_then(|c| c.as_str()) {
+            if !c.is_empty() { return c.to_string(); }
+        }
+        if let Some(c) = v.get("meta").and_then(|s| s.get("cwd")).and_then(|c| c.as_str()) {
+            if !c.is_empty() { return c.to_string(); }
+        }
+        // message entry 里也可能带 cwd
+        if v.get("type").and_then(|t| t.as_str()) == Some("message") {
+            if let Some(c) = v.get("message").and_then(|m| m.get("cwd")).and_then(|c| c.as_str()) {
+                if !c.is_empty() { return c.to_string(); }
+            }
+        }
+    }
+    String::new()
+}
+
 
 #[tauri::command]
 async fn start_pi(app: AppHandle, state: State<'_, PiState>) -> Result<(), String> {
@@ -417,12 +450,17 @@ fn collect_sessions(
             .map(|d| d.as_secs()).unwrap_or(0);
         let size = meta.len();
         let filename = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
-        // 工作目录（父目录名形如 --<encoded-cwd>--，解码回可读路径用于展示）
-        let cwd = path.parent()
-            .and_then(|p| p.file_name())
-            .and_then(|s| s.to_str())
-            .map(|s| decode_cwd_dir(s))
-            .unwrap_or_default();
+        // 工作目录：优先从会话文件内容读取真实 cwd，回退到目录名解码
+        let cwd = {
+            let from_file = cwd_from_session(&path);
+            if !from_file.is_empty() { from_file } else {
+                path.parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|s| s.to_str())
+                    .map(|s| decode_cwd_dir(s))
+                    .unwrap_or_default()
+            }
+        };
         // 取首条用户消息作为显示标题（无标题会话的友好回退）
         let title = first_user_text_from_session(&path);
         out.push(serde_json::json!({

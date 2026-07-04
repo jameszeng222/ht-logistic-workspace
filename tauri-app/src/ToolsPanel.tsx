@@ -74,10 +74,7 @@ export function ToolsPanel({ onSendToAssistant }: ToolsPanelProps) {
   // 「让助手解读」去重：同一工具+同一输入+同一结果 10 秒内只发一次
   const lastReviewRef = useRef<{ key: string; time: number }>({ key: "", time: 0 });
 
-  const visibleTools = useMemo(() => {
-    const daily = tools.filter((t) => DAILY_TOOL_IDS.has(t.id));
-    return daily.length ? daily : tools.filter((t) => !t.id.includes("customs"));
-  }, [tools]);
+  const visibleTools = useMemo(() => tools, [tools]);
 
   const askAssistantToReview = useCallback(() => {
     if (!activeTool || !onSendToAssistant) return;

@@ -774,6 +774,7 @@ export default function App() {
     for (const s of filteredSessions) {
       const cwd = s.cwd?.trim();
       const normalized = cwd ? cwd.replace(/[\\/]+$/, "") : "";
+      // 项目名只取最后一段目录名（缩写），避免显示完整路径
       const projectName = normalized
         ? (normalized.split(/[\\/]/).pop() || normalized)
         : "Logistic Workspace";
@@ -802,8 +803,6 @@ export default function App() {
           📋
           {logs.length > 0 && <span className="badge">{logs.length}</span>}
         </button>
-        {/* 新建会话 */}
-        <button className="icon-btn" onClick={newSession} disabled={busy} title="新建会话">+ 新会话</button>
       </header>
 
       {/* ============ 主体 ============ */}
@@ -904,16 +903,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* 当前会话操作 */}
-          {currentSessionPath && (
-            <div className="sidebar-section">
-              <div className="sidebar-section-header"><span className="sidebar-title">当前会话操作</span></div>
-              <div className="session-ops">
-                <button className="session-op-btn" onClick={startRename} disabled={busy}>✎ 重命名</button>
-              </div>
-            </div>
-          )}
-
           {/* 统计 */}
           <div className="sidebar-section">
             <div className="sidebar-section-header"><span className="sidebar-title">当前会话</span></div>
@@ -1006,6 +995,35 @@ export default function App() {
               <CommandPalette input={input} index={cmdIndex} setIndex={setCmdIndex} onSelect={onCmdSelect} />
             )}
             <div className="composer-shell">
+              <div className="composer-inner">
+                <textarea
+                  value={input}
+                  onChange={(e) => { setInput(e.target.value); setShowCmdPalette(e.target.value.startsWith("/")); }}
+                  onKeyDown={(e) => {
+                    if (showCmdPalette) {
+                      if (e.key === "ArrowDown") { e.preventDefault(); setCmdIndex((i) => Math.min(i + 1, 7)); return; }
+                      if (e.key === "ArrowUp") { e.preventDefault(); setCmdIndex((i) => Math.max(i - 1, 0)); return; }
+                      if (e.key === "Escape") { e.preventDefault(); setShowCmdPalette(false); return; }
+                      if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey) {
+                        const cmdEl = document.querySelector(".cmd-item.active") as HTMLElement;
+                        if (cmdEl) { e.preventDefault(); cmdEl.click(); return; }
+                      }
+                    }
+                    if (e.key === "Escape") { e.preventDefault(); setInput(""); return; }
+                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+                  }}
+                  onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 200) + "px"; }}
+                  placeholder={ready ? "输入单据制作、数据分析或物流问题…" : "正在连接 Pi…"}
+                  rows={1}
+                  disabled={!ready}
+                />
+                {busy ? (
+                  <button className="abort-btn" onClick={abort} title="中断">中断</button>
+                ) : (
+                  <button className="send-btn" onClick={() => send()} disabled={!inputCanSend} title="发送">发送</button>
+                )}
+              </div>
+              {/* 工具栏移到输入框下方 */}
               <div className="composer-toolbar">
                 <button className="composer-pill" onClick={() => { refreshModels(); setShowModelPicker(true); }} title="切换模型">
                   {modelName} ▾
@@ -1027,36 +1045,9 @@ export default function App() {
                   工具调用
                 </button>
               </div>
-              <div className="composer-inner">
-                <textarea
-                  value={input}
-                  onChange={(e) => { setInput(e.target.value); setShowCmdPalette(e.target.value.startsWith("/")); }}
-                  onKeyDown={(e) => {
-                    if (showCmdPalette) {
-                      if (e.key === "ArrowDown") { e.preventDefault(); setCmdIndex((i) => Math.min(i + 1, 7)); return; }
-                      if (e.key === "ArrowUp") { e.preventDefault(); setCmdIndex((i) => Math.max(i - 1, 0)); return; }
-                      if (e.key === "Escape") { e.preventDefault(); setShowCmdPalette(false); return; }
-                      if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey) {
-                        const cmdEl = document.querySelector(".cmd-item.active") as HTMLElement;
-                        if (cmdEl) { e.preventDefault(); cmdEl.click(); return; }
-                      }
-                    }
-                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
-                  }}
-                  onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 200) + "px"; }}
-                  placeholder={ready ? "输入单据制作、数据分析或物流问题…" : "正在连接 Pi…"}
-                  rows={1}
-                  disabled={!ready}
-                />
-                {busy ? (
-                  <button className="abort-btn" onClick={abort} title="中断">中断</button>
-                ) : (
-                  <button className="send-btn" onClick={() => send()} disabled={!inputCanSend} title="发送">发送</button>
-                )}
-              </div>
             </div>
             <div className="composer-hint">
-              <span className="kbd">Enter</span> 发送 · <span className="kbd">Shift+Enter</span> 换行 · 物流工具在下方执行，结果可交给助手解读
+              <span className="kbd">Enter</span> 发送 · <span className="kbd">Shift+Enter</span> 换行 · <span className="kbd">Esc</span> 清空 · 物流工具在下方执行，结果可交给助手解读
               {busy && <span className="hint-busy"> · Pi 思考中…</span>}
             </div>
           </div>
