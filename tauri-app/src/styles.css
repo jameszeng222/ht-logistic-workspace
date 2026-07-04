@@ -209,15 +209,14 @@ body {
   -webkit-app-region: no-drag;
 }
 .win-btn {
-  width: 32px; height: 28px;
+  width: 38px; height: 30px;
   display: inline-flex; align-items: center; justify-content: center;
   background: transparent; border: none; cursor: pointer;
-  color: var(--fg-muted); font-size: 13px;
-  font-family: var(--font-sans);
-  line-height: 1;
-  border-radius: var(--radius-xs);
+  color: var(--fg-muted);
+  border-radius: var(--radius-sm);
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
+.win-btn svg { width: 12px; height: 12px; display: block; }
 .win-btn:hover { background: var(--surface-hover); color: var(--fg); }
 .win-btn.close:hover { background: var(--danger); color: oklch(0.99 0.003 260); }
 
@@ -375,7 +374,7 @@ body {
 .session-group-header {
   display: flex; align-items: center; gap: var(--space-2);
   padding: var(--space-2) var(--space-3) var(--space-1);
-  font-size: 11px;
+  font-size: 13px;
   color: var(--fg-muted);
   text-transform: none;
   font-weight: 600;
@@ -383,14 +382,14 @@ body {
   user-select: none;
 }
 .session-group-header:hover { color: var(--fg); }
-.session-group-icon { font-size: 10px; width: 14px; text-align: center; flex-shrink: 0; }
+.session-group-icon { font-size: 12px; width: 16px; text-align: center; flex-shrink: 0; }
 .session-group-title {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 10.5px;
+  font-size: 13px;
 }
 .session-group-count {
   background: var(--surface-hover);
@@ -469,7 +468,7 @@ body {
   position: relative;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto auto;
-  background: var(--bg); overflow: hidden; min-width: 0;
+  background: var(--bg); overflow: visible; min-width: 0;
 }
 .main.main-empty {
   grid-template-rows: minmax(190px, 0.74fr) auto minmax(310px, 0.94fr);
@@ -711,6 +710,27 @@ body {
 .composer {
   background: linear-gradient(to bottom, transparent, var(--bg) 18%);
   padding: var(--space-3) var(--space-6) var(--space-3);
+  position: relative;
+  transition: background var(--dur) var(--ease);
+}
+/* 拖拽文件到聊天框：高亮提示 */
+.composer.drag-over {
+  background: var(--primary-soft);
+}
+.composer.drag-over::before {
+  content: "拖放文件到聊天框开始分析";
+  position: absolute;
+  top: var(--space-2); left: 50%;
+  transform: translateX(-50%);
+  font-size: var(--text-xs);
+  color: var(--primary);
+  font-weight: 600;
+  pointer-events: none;
+  z-index: 50;
+  background: var(--surface);
+  padding: 2px var(--space-3);
+  border-radius: var(--radius-full);
+  border: 1px solid color-mix(in oklch, var(--primary) 40%, var(--border));
 }
 .main-empty .composer { padding-top: 0; }
 .composer-shell {
@@ -2132,6 +2152,12 @@ body {
 }
 .fb-entry.file .fb-entry-name {
   color: var(--fg-muted);
+}
+.fb-entry.file {
+  cursor: grab;
+}
+.fb-entry.file:active {
+  cursor: grabbing;
 }
 .fb-col-name {
   display: flex;

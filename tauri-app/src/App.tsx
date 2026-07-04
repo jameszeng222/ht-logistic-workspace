@@ -6,7 +6,7 @@
 // 2. 会话无法新增 —— new_session RPC + scan_sessions 扫描历史
 // 3. 输入框无法发送 —— StrictMode 副作用消除
 
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, type DragEvent as ReactDragEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -89,6 +89,8 @@ export default function App() {
   const [currentModel, setCurrentModel] = useState<ModelInfo | null>(null);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [showPermissionDropdown, setShowPermissionDropdown] = useState(false);
+  // 拖拽文件到聊天框：高亮提示 + drop 时把文件绝对路径插入输入框
+  const [dragOver, setDragOver] = useState(false);
 
   // 状态 & 统计
   const [piState, setPiState] = useState<PiState | null>(null);
@@ -756,6 +758,27 @@ export default function App() {
     catch (e) { toast(`中断失败: ${e}`, "error"); }
   }, [toast]);
 
+  // ====== 拖拽文件到聊天框 ======
+  // 从右侧文件浏览器拖入文件时，把绝对路径拼到输入框，并附带分析提示
+  const handleFileDrop = useCallback((e: ReactDragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+    // 优先读自定义类型，回退到 text/plain
+    const path = e.dataTransfer.getData("application/x-file-path") || e.dataTransfer.getData("text/plain");
+    if (!path || !path.trim()) return;
+    const trimmed = path.trim();
+    const fileName = trimmed.split(/[\\/]/).pop() || trimmed;
+    // 拼接：如果输入框已有内容，换行追加；否则直接填入分析提示
+    const analyzeText = `请分析文件：${trimmed}\n（${fileName}）`;
+    setInput((prev) => (prev.trim() ? `${prev}\n${analyzeText}` : analyzeText));
+    toast(`已添加文件：${fileName}`, "success");
+    setTimeout(() => {
+      const ta = document.querySelector(".composer-inner textarea") as HTMLTextAreaElement;
+      if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    }, 0);
+  }, [toast]);
+
   // ====== 命令面板补全 ======
   const onCmdSelect = useCallback((text: string) => {
     setInput(text);
@@ -879,9 +902,15 @@ export default function App() {
         </button>
         {/* 窗口控制（自定义标题栏） */}
         <div className="window-controls">
-          <button className="win-btn" onClick={() => getCurrentWindow().minimize()} title="最小化">&#8211;</button>
-          <button className="win-btn" onClick={() => getCurrentWindow().toggleMaximize()} title="最大化">&#9633;</button>
-          <button className="win-btn close" onClick={() => getCurrentWindow().close()} title="关闭">&#10005;</button>
+          <button className="win-btn" onClick={() => getCurrentWindow().minimize()} title="最小化" aria-label="最小化">
+            <svg viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="1.5" y="5.5" width="9" height="1.2" rx="0.6" fill="currentColor"/></svg>
+          </button>
+          <button className="win-btn" onClick={() => getCurrentWindow().toggleMaximize()} title="最大化" aria-label="最大化">
+            <svg viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="2" width="8" height="8" rx="1.2" stroke="currentColor" strokeWidth="1.2" fill="none"/></svg>
+          </button>
+          <button className="win-btn close" onClick={() => getCurrentWindow().close()} title="关闭" aria-label="关闭">
+            <svg viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 3 L9 9 M9 3 L3 9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+          </button>
         </div>
       </header>
 
@@ -1068,7 +1097,12 @@ export default function App() {
           <button className={`scroll-btn ${showScrollBtn ? "visible" : ""}`} onClick={() => scrollToBottom(true)} title="回到底部">↓</button>
 
           {/* 输入框 */}
-          <div className="composer">
+          <div
+            className={`composer ${dragOver ? "drag-over" : ""}`}
+            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; setDragOver(true); }}
+            onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOver(false); }}
+            onDrop={handleFileDrop}
+          >
             {showCmdPalette && (
               <CommandPalette input={input} index={cmdIndex} setIndex={setCmdIndex} onSelect={onCmdSelect} />
             )}

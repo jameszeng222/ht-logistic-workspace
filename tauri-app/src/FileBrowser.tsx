@@ -332,6 +332,15 @@ export function FileBrowser({ currentCwd, compact = false }: FileBrowserProps) {
                 key={entry.path}
                 className={`fb-entry ${entry.is_dir ? "dir" : "file"} ${selectedEntry?.path === entry.path ? "selected" : ""}`}
                 onClick={() => handleEntryClick(entry)}
+                draggable={!entry.is_dir}
+                onDragStart={(e) => {
+                  if (entry.is_dir) return;
+                  // 用 text/plain 传递绝对路径，聊天区 drop 时读取并插入输入框
+                  e.dataTransfer.setData("text/plain", entry.path);
+                  e.dataTransfer.setData("application/x-file-path", entry.path);
+                  e.dataTransfer.effectAllowed = "copy";
+                }}
+                title={!entry.is_dir ? `${entry.name}（拖拽到聊天框分析）` : entry.name}
               >
                 <span className="fb-col-name">
                   <span className="fb-entry-icon">{entry.is_dir ? "📁" : getFileIcon(entry.name)}</span>
