@@ -494,25 +494,44 @@ export default function App() {
   const handleUiRequest = useCallback((ev: any) => {
     const fireAndForget = ["notify","setStatus","setWidget","setTitle","setWorkingMessage","setWorkingVisible","setWorkingIndicator","setFooter","setTheme","setEditorText","setEditorComponent","pasteToEditor","setToolsExpanded"];
     if (fireAndForget.includes(ev.method)) return;
-    // 权限模式处理 confirm 类型请求（Pi 的 "Permission Required" / "Current agent requested" 等）
-    if (ev.method === "confirm") {
+    // 权限模式处理 confirm / select 类型请求
+    // Pi 工具权限弹窗：method="select", title="Permission Required",
+    //   message="Current agent requested tool 'find' for path '...' outside working directory..."
+    //   options=["Allow","Deny"] 或类似
+    // Pi 扩展确认弹窗：method="confirm", title=自定义, message=自定义
+    if (ev.method === "confirm" || ev.method === "select") {
       const mode = localStorage.getItem("pi-permission-mode") || "workspace";
       // 拼接 title + message 做关键字判断（中文 + 英文）
       const text = `${ev.title || ""} ${ev.message || ""}`.toLowerCase();
       // 破坏性操作关键字：删除/移除/清空/卸载/格式化/覆盖 + delete/remove/rm/drop/truncate/uninstall/overwrite
       const destructiveKeywords = ["删除", "移除", "清空", "卸载", "格式化", "覆盖", "delete", "remove", "rm ", "drop ", "truncate", "uninstall", "overwrite", "rmdir", "del "];
       const isDestructive = destructiveKeywords.some((k) => text.includes(k));
-      // 安全只读操作关键字：读取/查看/列表/查询/搜索/检查 + read/list/search/view/get/show/check/glob/grep
-      const safeKeywords = ["读取", "查看", "列表", "查询", "搜索", "检查", "显示", "获取", "read", "list", "search", "view", "show", "check", "glob", "grep", "ls ", "cat ", "head ", "tail ", "find ", "stat", "ffgrep", "ffind", "ffls", "ffcat", "ffread"];
+      // 安全只读工具关键字（Pi 内置工具权限弹窗常见）：
+      //   find/ls/cat/grep/glob/read/read_file/list/list_dir/search/view/show/check/stat
+      //   以及 ffgrep/ffind/ffls/ffcat/ffread 等扩展工具
+      const safeKeywords = ["读取", "查看", "列表", "查询", "搜索", "检查", "显示", "获取", "read", "list", "search", "view", "show", "check", "glob", "grep", "ls ", "cat ", "head ", "tail ", "find ", "stat", "ffgrep", "ffind", "ffls", "ffcat", "ffread", "tool 'find'", "tool 'ls'", "tool 'cat'", "tool 'grep'", "tool 'glob'", "tool 'read'", "tool 'list'", "tool 'search'", "tool 'view'", "tool 'show'", "tool 'check'", "tool 'stat'", "tool 'head'", "tool 'tail'"];
       const isSafe = safeKeywords.some((k) => text.includes(k));
+      addLog("event", `${ev.method}_recv · mode=${mode} · destructive=${isDestructive} · safe=${isSafe} · title="${ev.title || ""}" · msg="${(ev.message || "").slice(0, 80)}"`);
       const autoApprove = (reason: string) => {
-        invoke("send_command", { command: { type: "extension_ui_response", id: ev.id, confirmed: true, cancelled: false } })
+        // select 类型回复 {value: 选项}；confirm 类型回复 {confirmed:true}
+        // Pi 权限弹窗的 options 通常是 ["Allow","Deny"] 或 ["允许","拒绝"]，取第一个 Allow 类选项
+        let payload: any;
+        if (ev.method === "select") {
+          const opts: string[] = ev.options || [];
+          // 优先选 "Allow"/"允许"/"Yes"/"是"，否则取第一个非 Deny 项
+          const allowIdx = opts.findIndex((o) => /^(allow|允许|yes|是|ok|确定)$/i.test(o.trim()));
+          const denyIdx = opts.findIndex((o) => /^(deny|拒绝|no|否|cancel|取消)$/i.test(o.trim()));
+          const idx = allowIdx >= 0 ? allowIdx : (denyIdx >= 0 ? (denyIdx === 0 ? 1 : 0) : 0);
+          payload = { value: opts[idx] || "Allow", cancelled: false };
+        } else {
+          payload = { confirmed: true, cancelled: false };
+        }
+        invoke("send_command", { command: { type: "extension_ui_response", id: ev.id, ...payload } })
           .catch((e) => addLog("event", `auto-approve 失败: ${e}`));
-        addLog("event", `auto-approve · ${mode} · ${reason} · ${ev.title || ""} · ${ev.message || ""}`);
+        addLog("event", `auto-approve · ${mode} · ${reason} · ${ev.title || ""} · ${(ev.message || "").slice(0, 60)}`);
       };
-      addLog("event", `confirm_recv · mode=${mode} · destructive=${isDestructive} · safe=${isSafe} · title="${ev.title || ""}" · msg="${ev.message || ""}"`);
       if (mode === "trust") {
-        // 全信任：所有 confirm 自动放行
+        // 全信任：所有 confirm/select 自动放行
         autoApprove("全信任");
         return;
       }
