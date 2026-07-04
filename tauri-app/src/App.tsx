@@ -88,6 +88,7 @@ export default function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [currentModel, setCurrentModel] = useState<ModelInfo | null>(null);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const [showPermissionDropdown, setShowPermissionDropdown] = useState(false);
 
   // 状态 & 统计
   const [piState, setPiState] = useState<PiState | null>(null);
@@ -110,13 +111,6 @@ export default function App() {
     return localStorage.getItem("pi-auto-confirm") === "true" ? "trust" : "workspace";
   });
   const permissionModeLabel = permissionMode === "cautious" ? "审慎模式" : permissionMode === "workspace" ? "工作台模式" : "全信任模式";
-  const cyclePermissionMode = useCallback(() => {
-    setPermissionMode((prev) => {
-      const next = prev === "cautious" ? "workspace" : prev === "workspace" ? "trust" : "cautious";
-      localStorage.setItem("pi-permission-mode", next);
-      return next;
-    });
-  }, []);
   const [showExtManager, setShowExtManager] = useState(false);
   // 会话分组折叠状态（key=项目名，value=是否展开）
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => {
@@ -620,16 +614,17 @@ export default function App() {
     if (logAutoFollow.current) el.scrollTop = el.scrollHeight;
   }, [logs.length, showLogViewer]);
 
-  // 全局 ESC：关闭命令面板 / 模型下拉（即使焦点不在 textarea 上也能生效）
+  // 全局 ESC：关闭命令面板 / 模型下拉 / 权限下拉（即使焦点不在 textarea 上也能生效）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (showCmdPalette) { e.preventDefault(); setShowCmdPalette(false); return; }
       if (showModelDropdown) { e.preventDefault(); setShowModelDropdown(false); return; }
+      if (showPermissionDropdown) { e.preventDefault(); setShowPermissionDropdown(false); return; }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [showCmdPalette, showModelDropdown]);
+  }, [showCmdPalette, showModelDropdown, showPermissionDropdown]);
 
   // ====== 会话操作 ======
   const newSession = useCallback(async () => {
@@ -1110,6 +1105,7 @@ export default function App() {
               <div className="composer-toolbar">
                 <div className="model-dropdown-wrap">
                   <button
+                    type="button"
                     className="composer-pill"
                     onClick={() => { refreshModels(); setShowModelDropdown((v) => !v); }}
                     title="切换模型"
@@ -1124,9 +1120,10 @@ export default function App() {
                           <div className="model-dropdown-empty">未找到可用模型，请先配置 API Key</div>
                         ) : models.map((m) => (
                           <button
+                            type="button"
                             key={`${m.provider}/${m.id}`}
                             className={`model-dropdown-item ${currentModel?.id === m.id ? "active" : ""}`}
-                            onClick={() => { setModel(m.provider, m.id); setShowModelDropdown(false); }}
+                            onClick={(e) => { e.stopPropagation(); setModel(m.provider, m.id); setShowModelDropdown(false); }}
                           >
                             <span className="model-dropdown-name">{m.name}</span>
                             <span className="model-dropdown-meta">
@@ -1138,20 +1135,54 @@ export default function App() {
                     </>
                   )}
                 </div>
-                <button
-                  className="composer-pill"
-                  onClick={() => cyclePermissionMode()}
-                  title="切换工具权限模式"
-                >
-                  {permissionModeLabel}
-                </button>
-                <button className="composer-pill" onClick={() => setInput("帮我根据选中的物流文件制作发票和箱单，并检查缺失字段。")}>
+                <div className="model-dropdown-wrap">
+                  <button
+                    type="button"
+                    className="composer-pill"
+                    onClick={() => setShowPermissionDropdown((v) => !v)}
+                    title="切换工具权限模式"
+                  >
+                    {permissionModeLabel} ▾
+                  </button>
+                  {showPermissionDropdown && (
+                    <>
+                      <div className="dropdown-overlay" onClick={() => setShowPermissionDropdown(false)} />
+                      <div className="model-dropdown">
+                        <button
+                          type="button"
+                          className={`model-dropdown-item ${permissionMode === "cautious" ? "active" : ""}`}
+                          onClick={(e) => { e.stopPropagation(); setPermissionModePersist("cautious"); setShowPermissionDropdown(false); }}
+                        >
+                          <span className="model-dropdown-name">审慎模式</span>
+                          <span className="model-dropdown-meta">生成文件前确认，删除/外部请求必须确认</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`model-dropdown-item ${permissionMode === "workspace" ? "active" : ""}`}
+                          onClick={(e) => { e.stopPropagation(); setPermissionModePersist("workspace"); setShowPermissionDropdown(false); }}
+                        >
+                          <span className="model-dropdown-name">工作台模式</span>
+                          <span className="model-dropdown-meta">本地生成和分析自动执行，删除等重要修改才弹窗</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`model-dropdown-item ${permissionMode === "trust" ? "active" : ""}`}
+                          onClick={(e) => { e.stopPropagation(); setPermissionModePersist("trust"); setShowPermissionDropdown(false); }}
+                        >
+                          <span className="model-dropdown-name">全信任模式</span>
+                          <span className="model-dropdown-meta">所有已授权工具自动执行</span>
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+                <button type="button" className="composer-pill" onClick={() => setInput("帮我根据选中的物流文件制作发票和箱单，并检查缺失字段。")}>
                   单据制作
                 </button>
-                <button className="composer-pill" onClick={() => setInput("帮我分析这个物流 Excel，输出异常、趋势和下一步建议。")}>
+                <button type="button" className="composer-pill" onClick={() => setInput("帮我分析这个物流 Excel，输出异常、趋势和下一步建议。")}>
                   数据分析
                 </button>
-                <button className="composer-pill" onClick={() => { setInput("/"); setShowCmdPalette(true); }}>
+                <button type="button" className="composer-pill" onClick={() => { setInput("/"); setShowCmdPalette(true); }}>
                   工具调用
                 </button>
               </div>

@@ -756,21 +756,21 @@ body {
   border-color: color-mix(in oklch, var(--primary) 35%, var(--border));
 }
 
-/* 模型下拉框（上拉） */
+/* 模型/权限下拉框（上拉） */
 .model-dropdown-wrap { position: relative; display: inline-flex; }
 .model-dropdown {
   position: absolute;
   bottom: calc(100% + 4px);
   left: 0;
   min-width: 240px;
-  max-width: 320px;
+  max-width: 340px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-xl);
   padding: var(--space-1);
-  z-index: 100;
-  max-height: 320px;
+  z-index: 200;
+  max-height: 360px;
   overflow-y: auto;
   animation: dropdown-in var(--dur) var(--ease-out);
 }
@@ -793,17 +793,18 @@ body {
   border-radius: var(--radius-sm);
   cursor: pointer;
   text-align: left;
+  font-family: var(--font-sans);
   transition: background var(--dur-fast) var(--ease);
 }
 .model-dropdown-item:hover { background: var(--surface-hover); }
 .model-dropdown-item.active { background: var(--primary-soft); }
 .model-dropdown-item.active .model-dropdown-name { color: var(--primary); }
 .model-dropdown-name { font-size: var(--text-sm); font-weight: 500; color: var(--fg); }
-.model-dropdown-meta { font-size: var(--text-xs); color: var(--fg-muted); }
+.model-dropdown-meta { font-size: var(--text-xs); color: var(--fg-muted); white-space: normal; line-height: 1.4; }
 .dropdown-overlay {
   position: fixed;
   inset: 0;
-  z-index: 99;
+  z-index: 150;
   background: transparent;
 }
 .composer-inner {
