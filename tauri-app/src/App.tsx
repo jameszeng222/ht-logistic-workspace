@@ -16,7 +16,6 @@ import { ExtensionManager } from "./ExtensionManager";
 import { rebuildTurnsFromMessages } from "./utils";
 import { ChartView, extractChartConfig } from "./Chart";
 import { ToolsPanel } from "./ToolsPanel";
-import { BranchNavigator } from "./BranchNavigator";
 import { FileBrowser } from "./FileBrowser";
 import type { ToolCall, AssistantMsg, Turn } from "./types";
 import "./styles.css";
@@ -42,7 +41,7 @@ let toastId = 0;
 // ============ 主题 Hook ============
 function useTheme() {
   const [theme, setTheme] = useState<"dark"|"light"|"system">(() => {
-    return (localStorage.getItem("pi-theme") as any) || "dark";
+    return (localStorage.getItem("pi-theme") as any) || "light";
   });
   useEffect(() => {
     const resolved = theme === "system"
@@ -137,13 +136,10 @@ export default function App() {
   const [showCmdPalette, setShowCmdPalette] = useState(false);
   const [cmdIndex, setCmdIndex] = useState(0);
 
-  // 会话管理补全：搜索 / 重命名 / fork
+  // 会话管理补全：搜索 / 重命名
   const [sessionSearch, setSessionSearch] = useState("");
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameInput, setRenameInput] = useState("");
-  const [showForkModal, setShowForkModal] = useState(false);
-  const [forkMessages, setForkMessages] = useState<{entryId: string; text: string}[]>([]);
-  const [forkLoading, setForkLoading] = useState(false);
 
   // 引用
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -583,25 +579,6 @@ export default function App() {
     }
   }, [toast]);
 
-  // 切换会话分支（跳转到指定 entry）
-  // Pi 支持 get_tree 拿分支树，goto_entry 跳转到指定 entry
-  const switchBranch = useCallback(async (entryId: string) => {
-    if (!entryId) return;
-    try {
-      await invoke("send_command", { command: { type: "goto_entry", entryId } });
-      await refreshState();
-      const data = await rpc({ type: "get_messages" });
-      const msgs = data?.messages || [];
-      if (msgs.length > 0) {
-        const rebuilt = rebuildTurnsFromMessages(msgs);
-        setTurns(rebuilt);
-      }
-      toast("已切换分支", "success");
-    } catch (e) {
-      toast(`切换分支失败: ${e}`, "error");
-    }
-  }, [refreshState, rpc, toast]);
-
   const deleteSession = useCallback(async (path: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!confirm("确定删除这个会话？")) return;
@@ -630,29 +607,6 @@ export default function App() {
     } catch (e) { toast(`重命名失败: ${e}`, "error"); }
     setRenamingPath(null);
   }, [renamingPath, renameInput, rpc, refreshState, refreshSessions, toast]);
-
-  // fork：先拉可 fork 的消息列表，弹 Modal 让用户选
-  const openForkModal = useCallback(async () => {
-    if (busy) { toast("请等待当前任务完成", "info"); return; }
-    setForkLoading(true); setShowForkModal(true);
-    try {
-      const data = await rpc({ type: "get_fork_messages" });
-      const list = data?.messages || [];
-      setForkMessages(list.map((m: any) => ({ entryId: m.entryId, text: m.text })));
-    } catch (e) { toast(`拉取 fork 消息失败: ${e}`, "error"); setShowForkModal(false); }
-    setForkLoading(false);
-  }, [busy, rpc, toast]);
-
-  const doFork = useCallback(async (entryId: string) => {
-    try {
-      const data = await rpc({ type: "fork", entryId });
-      if (data?.cancelled) { toast("fork 被取消", "info"); }
-      else { toast("已 fork 会话", "success"); }
-      setShowForkModal(false);
-      await refreshState(); await refreshSessions();
-      await loadHistory();
-    } catch (e) { toast(`fork 失败: ${e}`, "error"); }
-  }, [rpc, toast, refreshState, refreshSessions, loadHistory]);
 
   // clone 当前会话
   const cloneSession = useCallback(async () => {
@@ -772,11 +726,6 @@ export default function App() {
   // ====== 派生数据 ======
   const contextPercent = sessionStats?.contextUsage?.percent ?? 0;
   const contextClass = contextPercent > 80 ? "high" : contextPercent > 50 ? "mid" : "low";
-  const stats = {
-    turns: turns.length,
-    tools: turns.reduce((n, t) => n + Object.keys(t.toolCalls).length, 0),
-    running: turns.reduce((n, t) => n + Object.values(t.toolCalls).filter((x) => x.status === "running").length, 0),
-  };
   const inputCanSend = ready && !busy && input.trim().length > 0;
   const modelName = currentModel?.name || piState?.model?.name || "未设置";
   // 日志过滤
@@ -804,23 +753,18 @@ export default function App() {
     return match?.cwd;
   }, [currentSessionPath, sessions]);
 
-  // 按工作目录分组（学 pi-web 的会话浏览器）
-  // 有 cwd 的按 cwd 分组，无 cwd 的归到「其他会话」
-  const groupedSessions = useMemo(() => {
+  const projectSessions = useMemo(() => {
     const groups = new Map<string, SessionInfo[]>();
     for (const s of filteredSessions) {
-      const key = s.cwd && s.cwd.trim() ? s.cwd : "__other__";
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(s);
+      const cwd = s.cwd?.trim();
+      const normalized = cwd ? cwd.replace(/[\\/]+$/, "") : "";
+      const projectName = normalized
+        ? (normalized.split(/[\\/]/).pop() || normalized)
+        : "Logistic Workspace";
+      if (!groups.has(projectName)) groups.set(projectName, []);
+      groups.get(projectName)!.push(s);
     }
-    // 排序：有 cwd 的组按组名字母序，「其他会话」放最后
-    const entries = Array.from(groups.entries());
-    entries.sort(([a], [b]) => {
-      if (a === "__other__") return 1;
-      if (b === "__other__") return -1;
-      return a.localeCompare(b);
-    });
-    return entries;
+    return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [filteredSessions]);
 
   return (
@@ -876,12 +820,12 @@ export default function App() {
                 <div style={{ padding: "12px 8px", fontSize: 12, color: "var(--fg-muted)" }}>
                   {sessions.length === 0 ? "暂无历史会话" : "无匹配会话"}
                 </div>
-              ) : groupedSessions.map(([cwd, groupSessions]) => (
-                <div key={cwd} className="session-group">
+              ) : projectSessions.map(([projectName, groupSessions]) => (
+                <div key={projectName} className="session-group">
                   <div className="session-group-header">
                     <span className="session-group-icon">📁</span>
-                    <span className="session-group-title" title={cwd === "__other__" ? "无工作目录的会话" : cwd}>
-                      {cwd === "__other__" ? "其他会话" : (cwd.length > 30 ? "…" + cwd.slice(-30) : cwd)}
+                    <span className="session-group-title" title={projectName}>
+                      {projectName}
                     </span>
                     <span className="session-group-count">{groupSessions.length}</span>
                   </div>
@@ -941,16 +885,8 @@ export default function App() {
               <div className="sidebar-section-header"><span className="sidebar-title">当前会话操作</span></div>
               <div className="session-ops">
                 <button className="session-op-btn" onClick={startRename} disabled={busy}>✎ 重命名</button>
-                <button className="session-op-btn" onClick={openForkModal} disabled={busy}>⑂ Fork</button>
                 <button className="session-op-btn" onClick={cloneSession} disabled={busy}>⧉ 克隆</button>
               </div>
-            </div>
-          )}
-
-          {/* 会话分支导航 */}
-          {currentSessionPath && (
-            <div className="sidebar-section" style={{ flex: "0 0 auto", maxHeight: "40vh", overflow: "hidden", display: "flex", flexDirection: "column" }}>
-              <BranchNavigator sessionPath={currentSessionPath} onSwitchBranch={switchBranch} />
             </div>
           )}
 
@@ -964,8 +900,6 @@ export default function App() {
                   {ready ? (busy ? "思考中" : "空闲") : "未连接"}
                 </span>
               </div>
-              <div className="stat-row"><span className="stat-label">对话轮数</span><span className="stat-value">{stats.turns}</span></div>
-              <div className="stat-row"><span className="stat-label">工具调用</span><span className="stat-value">{stats.tools}</span></div>
               {sessionStats?.cost != null && (
                 <div className="stat-row"><span className="stat-label">费用</span><span className="stat-value">${sessionStats.cost.toFixed(4)}</span></div>
               )}
@@ -987,20 +921,14 @@ export default function App() {
         </aside>
 
         {/* 主区 */}
-        <main className="main">
+        <main className={`main ${turns.length === 0 ? "main-empty" : ""}`}>
           <div className="messages" ref={messagesRef} onScroll={handleScroll}>
             <div className="messages-inner">
               {turns.length === 0 ? (
                 <div className="empty-state">
-                  <div className="empty-icon">✨</div>
-                  <h3>开始与 Pi 助手对话</h3>
-                  <p>覆盖数据分析、文档处理、自动化、任务管理</p>
-                  <div className="examples">
-                    <button className="example-chip" onClick={() => send("你是谁？能帮我做什么？")}>你是谁？能帮我做什么？</button>
-                    <button className="example-chip" onClick={() => send("帮我新建一个任务：明天上午开会")}>帮我新建一个任务：明天上午开会</button>
-                    <button className="example-chip" onClick={() => send("~/.pi/data.db 里有哪些表")}>~/.pi/data.db 里有哪些表</button>
-                    <button className="example-chip" onClick={() => send("列出我所有的待办任务")}>列出我所有的待办任务</button>
-                  </div>
+                  <div className="workspace-eyebrow">HT LOGISTIC AGENT</div>
+                  <h3>Logistic Workspace</h3>
+                  <p>面向日常单据制作和物流数据分析的本地 AI 工作台。选择下方工具处理 Excel/PDF，或直接描述你要完成的任务。</p>
                 </div>
               ) : turns.map((turn) => (
                 <div key={turn.id} className="turn">
@@ -1092,7 +1020,7 @@ export default function App() {
                     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
                   }}
                   onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 200) + "px"; }}
-                  placeholder={ready ? "描述你要处理的单据或数据，也可以直接在下方工具区选择文件…" : "正在连接 Pi…"}
+                  placeholder={ready ? "输入单据制作、数据分析或物流问题…" : "正在连接 Pi…"}
                   rows={1}
                   disabled={!ready}
                 />
@@ -1466,37 +1394,6 @@ export default function App() {
 
             <div className="modal-actions">
               <button className="btn-primary" onClick={() => setShowSettings(false)}>完成</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ============ Fork 选择 Modal ============ */}
-      {showForkModal && (
-        <div className="modal-overlay" onClick={() => setShowForkModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560 }}>
-            <div className="modal-title">选择 Fork 点</div>
-            <div className="modal-message">从哪条用户消息分叉出新会话？</div>
-            {forkLoading ? (
-              <div style={{ padding: "16px 0", textAlign: "center", color: "var(--fg-muted)" }}>加载中…</div>
-            ) : forkMessages.length === 0 ? (
-              <div style={{ padding: "16px 0", textAlign: "center", color: "var(--fg-muted)" }}>没有可 fork 的消息</div>
-            ) : (
-              <div className="fork-list">
-                {forkMessages.map((m) => (
-                  <div
-                    key={m.entryId}
-                    className="fork-item"
-                    onClick={() => doFork(m.entryId)}
-                  >
-                    <div className="fork-item-text">{m.text.slice(0, 100) || "(空消息)"}</div>
-                    {m.text.length > 100 && <div className="fork-item-more">…</div>}
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="modal-actions" style={{ marginTop: 16 }}>
-              <button className="btn-secondary" onClick={() => setShowForkModal(false)}>取消</button>
             </div>
           </div>
         </div>
