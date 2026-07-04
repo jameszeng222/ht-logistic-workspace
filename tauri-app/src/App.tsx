@@ -359,13 +359,22 @@ export default function App() {
     try {
       await invoke("write_text_file", { path: systemPromptPath, content: systemPrompt });
       setSystemPromptDirty(false);
-      toast("系统提示词已保存。新会话生效（当前会话不会热重载）。", "success");
+      // SYSTEM.md / APPEND_SYSTEM.md 是 Pi 子进程启动时一次性读取的，运行中不会热重载。
+      // 这里重启 Pi 子进程（保留当前 cwd）让新提示词真正生效。
+      try {
+        await invoke("restart_pi", { cwd: workdirRef.current.trim() || null, sessionPath: null });
+        setReady(true);
+        await refreshState();
+        toast("系统提示词已保存并重新加载（Pi 已重启）。", "success");
+      } catch (e) {
+        toast(`提示词已写入文件，但重启 Pi 失败：${e}。请手动重启应用。`, "error");
+      }
     } catch (e) {
       toast(`保存失败: ${e}`, "error");
     } finally {
       setSystemPromptSaving(false);
     }
-  }, [systemPrompt, systemPromptPath, toast]);
+  }, [systemPrompt, systemPromptPath, toast, refreshState]);
 
   // ====== 流式节流 ======
   const flushText = useCallback(() => {
@@ -1339,11 +1348,7 @@ export default function App() {
                   <div className="empty-mark">HT LOGISTIC AGENT</div>
                   <h3>Logistic Workspace</h3>
                   <p><span className="empty-pilot">Pilot</span> · 物流工作台 AI 调度员</p>
-                  <div className="empty-suggestions">
-                    <button className="suggestion-chip" onClick={() => { setInput("分析这个 Excel 的关键数据和异常点"); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer-shell textarea")?.focus(), 0); }}>分析 Excel 关键数据</button>
-                    <button className="suggestion-chip" onClick={() => { setInput("根据这份提单生成装箱单"); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer-shell textarea")?.focus(), 0); }}>根据提单生成装箱单</button>
-                    <button className="suggestion-chip" onClick={() => { setInput("汇总这批货物的运费和时效"); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer-shell textarea")?.focus(), 0); }}>汇总运费和时效</button>
-                  </div>
+                  <div className="empty-suggestions" style={{ display: "none" }} />
                 </div>
               ) : turns.map((turn) => (
                 <div key={turn.id} className="turn">
@@ -1457,7 +1462,7 @@ export default function App() {
                     if (e.key === "Escape") { e.preventDefault(); setInput(""); return; }
                     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
                   }}
-                  onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 200) + "px"; }}
+                  onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 220) + "px"; }}
                   placeholder={ready ? "输入单据制作、数据分析或物流问题…" : "正在连接 Pi…"}
                   rows={1}
                   disabled={!ready}
@@ -1468,16 +1473,16 @@ export default function App() {
                   <button className="send-btn" onClick={() => send()} disabled={!inputCanSend} title="发送">发送</button>
                 )}
               </div>
-              {/* 工具栏：左侧操作组（附件/模型/权限），右侧快捷 prompt 组（单据/分析/工具），中间 spacer 分隔 */}
+              {/* 工具栏：左侧操作组（附件/模型/权限），右侧工具调用，中间 spacer 分隔 */}
               <div className="composer-toolbar">
                 <div className="composer-pill-group">
                   <button
                     type="button"
-                    className="composer-pill composer-pill-icon"
+                    className="composer-pill"
                     onClick={pickAttachments}
                     title="添加附件（Excel/Word/PDF 等）"
                   >
-                    📎
+                    附件
                   </button>
                   <button
                     ref={modelBtnRef}
@@ -1499,14 +1504,8 @@ export default function App() {
                   </button>
                 </div>
                 <div className="composer-pill-group">
-                  <button type="button" className="composer-pill composer-pill-quick" onClick={() => setInput("帮我根据选中的物流文件制作发票和箱单，并检查缺失字段。")}>
-                    单据
-                  </button>
-                  <button type="button" className="composer-pill composer-pill-quick" onClick={() => setInput("帮我分析这个物流 Excel，输出异常、趋势和下一步建议。")}>
-                    数据
-                  </button>
-                  <button type="button" className="composer-pill composer-pill-icon" onClick={() => { setInput("/"); setShowCmdPalette(true); }} title="斜杠命令 / 工具调用">
-                    🔧
+                  <button type="button" className="composer-pill" onClick={() => { setInput("/"); setShowCmdPalette(true); }} title="斜杠命令 / 工具调用">
+                    工具调用
                   </button>
                 </div>
               </div>
@@ -1908,6 +1907,7 @@ export default function App() {
                 <div>
                   <div className="setting-label">提示词文件</div>
                   <div className="setting-desc">{systemPromptPathHint}</div>
+                  <div className="setting-desc" style={{ marginTop: 4, color: "var(--fg-subtle)" }}>保存后会自动重启 Pi 让新提示词立即生效。</div>
                 </div>
                 <div style={{ display: "flex", gap: "var(--space-2)", width: "100%" }}>
                   <select

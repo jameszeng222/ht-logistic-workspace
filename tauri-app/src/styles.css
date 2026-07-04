@@ -350,9 +350,14 @@ body {
 .model-btn:active { transform: scale(0.97); }
 
 /* ============ 主体 ============ */
+/* .body 用 3 行网格让侧栏与主区共享行高：
+   第 1 行（1fr）= 会话列表 / 消息区；第 2 行（auto）= 物流工具导航 / 工具执行区；
+   第 3 行（auto）= 状态条 / 输入框。侧栏与主区各自用 subgrid 继承这些行，
+   于是"物流工具"的上分隔线与"工具执行区"的上分隔线天然齐平。 */
 .body {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-rows: minmax(0, 1fr) auto auto;
   height: 100%; overflow: hidden;
 }
 .body.workspace-mode {
@@ -360,12 +365,19 @@ body {
 }
 .body.sidebar-hidden { grid-template-columns: 0 1fr; }
 .body.sidebar-hidden .sidebar { display: none; }
+/* 空状态：消息区缩小、工具区放大（工具区在第 2 行，输入框在第 3 行 auto）*/
+.body:has(.main.main-empty) {
+  grid-template-rows: minmax(190px, 0.74fr) minmax(310px, 0.94fr) auto;
+}
 
 /* ============ 侧栏 ============ */
 .sidebar {
   background: var(--bg);
   border-right: 0;
-  display: flex; flex-direction: column; overflow: hidden;
+  display: grid;
+  grid-template-rows: subgrid;
+  grid-row: 1 / -1;
+  overflow: hidden;
 }
 .sidebar-section { border-bottom: 0; }
 .sidebar-section-header {
@@ -545,6 +557,7 @@ body {
   padding: var(--space-2) var(--space-4);
   border-top: 1px solid var(--border-subtle);
   background: var(--bg);
+  align-self: end;
   flex-shrink: 0;
 }
 /* 第 1 行：状态点 + 状态文字 */
@@ -570,12 +583,11 @@ body {
 .sidebar-footer-model {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   min-width: 0; max-width: 120px;
-  font-family: var(--font-mono);
 }
 .sidebar-footer-perm { flex-shrink: 0; }
 .sidebar-footer-pct {
   flex-shrink: 0;
-  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  font-variant-numeric: tabular-nums;
 }
 /* 上下文进度条：全宽细条，放在信息行下方 */
 .sidebar-footer-ctxbar {
@@ -594,19 +606,18 @@ body {
 .main {
   position: relative;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  grid-template-rows: subgrid;
+  grid-row: 1 / -1;
   /* overflow: hidden 保证 grid 行高约束生效：消息区超出时在自身 .messages 内滚动，
      不会撑开 .main 把 composer/tool-workbench 挤出视口。
      下拉框已用 React Portal 渲染到 document.body，不再依赖 .main overflow:visible。 */
   background: var(--bg); overflow: hidden; min-width: 0;
 }
-.main.main-empty {
-  grid-template-rows: minmax(190px, 0.74fr) auto minmax(310px, 0.94fr);
-}
 .tool-workbench {
   min-width: 0;
   overflow: hidden;
   display: flex;
+  grid-row: 2;
   background: transparent;
   border-top: 1px solid var(--border-subtle);
   padding: var(--space-3) var(--space-6) var(--space-4);
@@ -663,8 +674,9 @@ body {
   background: var(--bg);
   border-left: 0;
   display: flex;
+  grid-row: 1 / -1;
 }
-.messages { min-height: 0; overflow-y: auto; overflow-x: hidden; position: relative; }
+.messages { min-height: 0; overflow-y: auto; overflow-x: hidden; position: relative; grid-row: 1; }
 .messages-inner {
   max-width: var(--content-max); margin: 0 auto;
   padding: var(--space-5) 0 var(--space-6);
@@ -946,6 +958,7 @@ body {
   background: linear-gradient(to bottom, transparent, var(--bg) 18%);
   padding: var(--space-3) var(--space-6) var(--space-3);
   position: relative;
+  grid-row: 3;
   transition: background var(--dur) var(--ease);
 }
 /* 拖拽文件到聊天框：高亮提示 */
@@ -1147,7 +1160,7 @@ body {
   flex: 1; background: transparent; border: none; outline: none; resize: none;
   color: var(--fg); font-family: var(--font-sans);
   font-size: var(--text-base); line-height: var(--leading-normal);
-  padding: var(--space-2) 0; max-height: 200px; min-height: 24px;
+  padding: var(--space-2) 0; max-height: 220px; min-height: 52px;
 }
 .composer-inner textarea::placeholder { color: var(--fg-subtle); }
 .composer-inner textarea:disabled { opacity: 0.5; cursor: not-allowed; }
