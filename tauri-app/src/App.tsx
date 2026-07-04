@@ -18,7 +18,7 @@ import { CommandPalette } from "./CommandPalette";
 import { ExtensionManager } from "./ExtensionManager";
 import { rebuildTurnsFromMessages } from "./utils";
 import { ChartView, extractChartConfig } from "./Chart";
-import { ToolsPanel, type ToolsPanelHandle } from "./ToolsPanel";
+import { ToolsPanel, type ToolsPanelHandle, type ToolDef } from "./ToolsPanel";
 import { FileBrowser } from "./FileBrowser";
 import type { ToolCall, AssistantMsg, Turn } from "./types";
 import "./styles.css";
@@ -908,6 +908,9 @@ export default function App() {
   // 点击"单据"/"数据"按钮：通过 toolsPanelRef 命令式调用 loadFile，
   // 直接操作 ToolsPanel 内部 state，无 state 同步问题，连续点击独立可靠。
   const toolsPanelRef = useRef<ToolsPanelHandle>(null);
+  // 工具导航镜像状态：ToolsPanel 上报 tools/activeTool，供左侧栏渲染导航
+  const [toolsList, setToolsList] = useState<ToolDef[]>([]);
+  const [activeToolMirrored, setActiveToolMirrored] = useState<ToolDef | null>(null);
   const runToolFromBrowser = useCallback((path: string, toolKind: "invoice" | "data") => {
     const trimmed = path.trim();
     if (!trimmed) return;
@@ -1276,18 +1279,49 @@ export default function App() {
             </div>
           </div>
 
-          {/* sidebar 底部紧凑状态条：上下文用量 + 状态，弱化视觉权重 */}
+          {/* 物流工具导航：从中间工具区拆出，放左侧栏
+              点击切换中间执行区的当前工具（命令式调用 ToolsPanel.selectTool） */}
+          <div className="sidebar-section sidebar-tools-nav">
+            <div className="sidebar-section-header">
+              <span className="sidebar-title">物流工具</span>
+            </div>
+            <div className="sidebar-tools-list">
+              {toolsList.length === 0 ? (
+                <div className="sidebar-tools-empty">等待 sidecar…</div>
+              ) : toolsList.map((t) => (
+                <button
+                  key={t.id}
+                  className={`sidebar-tool-item ${activeToolMirrored?.id === t.id ? "active" : ""}`}
+                  onClick={() => toolsPanelRef.current?.selectTool(t.id)}
+                  title={t.description}
+                >
+                  <span className="sidebar-tool-name">{t.name}</span>
+                  <span className="sidebar-tool-meta">{t.input.toUpperCase()} → {t.output.toUpperCase()}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* sidebar 底部紧凑状态条：状态 + 模型 + 权限 + 上下文用量
+              把 composer 里的模型/权限信息只读镜像到左下角，让底部不再是单条进度条 */}
           <div className="sidebar-footer-bar">
-            <div className="sidebar-footer-status">
+            <div className="sidebar-footer-info" title={`模型：${currentModel?.name ?? "未连接"} · ${permissionModeLabel}`}>
               <span className={`sidebar-footer-dot ${ready ? (busy ? "busy" : "ready") : "error"}`} />
-              <span>{ready ? (busy ? "思考中" : "空闲") : "未连接"}</span>
+              <span className="sidebar-footer-state">{ready ? (busy ? "思考中" : "空闲") : "未连接"}</span>
+              <span className="sidebar-footer-sep">·</span>
+              <span className="sidebar-footer-model">{currentModel?.name ?? "—"}</span>
+              <span className="sidebar-footer-sep">·</span>
+              <span className="sidebar-footer-perm">{permissionMode === "cautious" ? "审慎" : permissionMode === "workspace" ? "工作台" : "信任"}</span>
+              {contextPercent > 0 && (
+                <>
+                  <span className="sidebar-footer-sep">·</span>
+                  <span className="sidebar-footer-pct">{contextPercent.toFixed(0)}%</span>
+                </>
+              )}
             </div>
             {contextPercent > 0 && (
-              <div className="sidebar-footer-ctx" title={`上下文 ${contextPercent.toFixed(0)}% · ${sessionStats?.contextUsage?.tokens ?? 0} / ${sessionStats?.contextUsage?.contextWindow ?? 0} tokens`}>
-                <div className="sidebar-footer-ctx-bar">
-                  <div className={`sidebar-footer-ctx-fill ${contextClass}`} style={{ width: `${Math.min(contextPercent, 100)}%` }} />
-                </div>
-                <span className="sidebar-footer-ctx-text">{contextPercent.toFixed(0)}%</span>
+              <div className="sidebar-footer-ctxbar" title={`上下文 ${contextPercent.toFixed(0)}% · ${sessionStats?.contextUsage?.tokens ?? 0} / ${sessionStats?.contextUsage?.contextWindow ?? 0} tokens`}>
+                <div className={`sidebar-footer-ctx-fill ${contextClass}`} style={{ width: `${Math.min(contextPercent, 100)}%` }} />
               </div>
             )}
           </div>
@@ -1299,7 +1333,7 @@ export default function App() {
             <div className="messages-inner">
               {turns.length === 0 ? (
                 <div className="empty-state">
-                  <div className="empty-mark">HT</div>
+                  <div className="empty-mark">HT LOGISTIC AGENT</div>
                   <h3>Logistic Workspace</h3>
                   <p>Pilot · 物流工作台 AI 调度员</p>
                   <div className="empty-suggestions">
@@ -1533,7 +1567,14 @@ export default function App() {
             </div>
           </div>
           <section className="tool-workbench">
-            <ToolsPanel ref={toolsPanelRef} onSendToAssistant={(message) => send(message)} onToolOutput={addToolOutput} />
+            <ToolsPanel
+              ref={toolsPanelRef}
+              onSendToAssistant={(message) => send(message)}
+              onToolOutput={addToolOutput}
+              onToolsChange={setToolsList}
+              onActiveToolChange={setActiveToolMirrored}
+              hideNav
+            />
           </section>
         </main>
         <aside className="workspace-files">

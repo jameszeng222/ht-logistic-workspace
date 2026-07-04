@@ -13,7 +13,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 
-interface ToolDef {
+export interface ToolDef {
   id: string;
   name: string;
   description: string;
@@ -33,6 +33,12 @@ interface ToolsPanelProps {
   onSendToAssistant?: (message: string) => void;
   /** 工具执行成功并保存输出文件后回调，路径交给 App 加入"工具输出"上下文 */
   onToolOutput?: (path: string, toolName: string) => void;
+  /** 工具列表变化时上报，供 App 在左侧栏渲染导航 */
+  onToolsChange?: (tools: ToolDef[]) => void;
+  /** 当前选中工具变化时上报，供 App 高亮左侧栏导航 */
+  onActiveToolChange?: (tool: ToolDef | null) => void;
+  /** 隐藏内置工具导航（导航移到左侧栏时设 true，中间只留执行区） */
+  hideNav?: boolean;
 }
 
 /**
@@ -46,6 +52,8 @@ interface ToolsPanelProps {
 export interface ToolsPanelHandle {
   /** 加载文件到工具区，按 toolKind 切换工具并填入 filePath */
   loadFile: (path: string, toolKind: "invoice" | "data") => void;
+  /** 按 id 切换当前工具（供左侧栏导航点击调用），清空文件与结果 */
+  selectTool: (id: string) => void;
 }
 
 const INPUT_FILTERS: Record<ToolDef["input"], { name: string; extensions: string[] }[]> = {
@@ -73,7 +81,7 @@ function workflowLabel(tool: ToolDef): string {
   return "物流工具";
 }
 
-export const ToolsPanel = forwardRef<ToolsPanelHandle, ToolsPanelProps>(function ToolsPanel({ onSendToAssistant, onToolOutput }, ref) {
+export const ToolsPanel = forwardRef<ToolsPanelHandle, ToolsPanelProps>(function ToolsPanel({ onSendToAssistant, onToolOutput, onToolsChange, onActiveToolChange, hideNav = false }, ref) {
   const [tools, setTools] = useState<ToolDef[]>([]);
   const [sidecarUrl, setSidecarUrl] = useState("http://127.0.0.1:8000");
   const [sidecarReady, setSidecarReady] = useState(false);
@@ -154,6 +162,7 @@ export const ToolsPanel = forwardRef<ToolsPanelHandle, ToolsPanelProps>(function
 
   // ============ 命令式 API：供外部 ref 调用 ============
   // loadFile(path, toolKind)：按 toolKind 找工具 → 切换 activeTool → 填入 filePath
+  // selectTool(id)：按 id 切换 activeTool（供左侧栏导航点击调用），清空文件与结果
   // 每次调用都是独立命令，直接操作 state，无 useEffect 副作用链。
   useImperativeHandle(ref, () => ({
     loadFile: (path: string, toolKind: "invoice" | "data") => {
@@ -177,7 +186,20 @@ export const ToolsPanel = forwardRef<ToolsPanelHandle, ToolsPanelProps>(function
       setJsonResult(null);
       setError(null);
     },
+    selectTool: (id: string) => {
+      const matched = tools.find((t) => t.id === id) || null;
+      if (!matched) return;
+      setActiveTool(matched);
+      setFilePath(null);
+      setSavedPath(null);
+      setJsonResult(null);
+      setError(null);
+    },
   }), [tools]);
+
+  // 工具列表 / 选中工具变化时上报，供 App 在左侧栏渲染导航
+  useEffect(() => { onToolsChange?.(tools); }, [tools, onToolsChange]);
+  useEffect(() => { onActiveToolChange?.(activeTool); }, [activeTool, onActiveToolChange]);
 
   // ============ 选文件（Tauri 原生对话框）============
   const pickFile = useCallback(async () => {
@@ -281,30 +303,33 @@ export const ToolsPanel = forwardRef<ToolsPanelHandle, ToolsPanelProps>(function
       )}
 
       <div className="tools-body">
-        <div className="tools-list">
-          <div className="tools-list-title">日常流程</div>
-          {visibleTools.length === 0 ? (
-            <div className="tools-empty">
-              {sidecarReady ? "未拉到工具列表" : "等待 sidecar 就绪…"}
-            </div>
-          ) : visibleTools.map((t) => (
-            <button
-              key={t.id}
-              className={`tool-card ${activeTool?.id === t.id ? "active" : ""}`}
-              onClick={() => { setActiveTool(t); setFilePath(null); setSavedPath(null); setJsonResult(null); setError(null); }}
-            >
-              <div className="tool-card-name">{t.name}</div>
-              <div className="tool-card-desc">{t.description}</div>
-              <div className="tool-card-meta">
-                <span>{workflowLabel(t)}</span>
-                <span>·</span>
-                <span>{t.input.toUpperCase()}</span>
-                <span>→</span>
-                <span>{t.output.toUpperCase()}</span>
+        {/* 内置导航：hideNav=true 时由左侧栏承载导航，中间只留执行区 */}
+        {!hideNav && (
+          <div className="tools-list">
+            <div className="tools-list-title">日常流程</div>
+            {visibleTools.length === 0 ? (
+              <div className="tools-empty">
+                {sidecarReady ? "未拉到工具列表" : "等待 sidecar 就绪…"}
               </div>
-            </button>
-          ))}
-        </div>
+            ) : visibleTools.map((t) => (
+              <button
+                key={t.id}
+                className={`tool-card ${activeTool?.id === t.id ? "active" : ""}`}
+                onClick={() => { setActiveTool(t); setFilePath(null); setSavedPath(null); setJsonResult(null); setError(null); }}
+              >
+                <div className="tool-card-name">{t.name}</div>
+                <div className="tool-card-desc">{t.description}</div>
+                <div className="tool-card-meta">
+                  <span>{workflowLabel(t)}</span>
+                  <span>·</span>
+                  <span>{t.input.toUpperCase()}</span>
+                  <span>→</span>
+                  <span>{t.output.toUpperCase()}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="tools-detail">
           {activeTool ? (

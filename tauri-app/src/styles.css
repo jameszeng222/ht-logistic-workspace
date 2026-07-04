@@ -388,6 +388,55 @@ body {
 .sidebar-new-btn:active:not(:disabled) { transform: scale(0.95); }
 .sidebar-new-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+/* 物流工具导航（从中间工具区拆出，放左侧栏） */
+.sidebar-tools-nav {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-subtle);
+  padding-bottom: var(--space-2);
+}
+.sidebar-tools-list {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: var(--space-1) var(--space-2);
+  max-height: 180px;
+  overflow-y: auto;
+}
+.sidebar-tools-empty {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+}
+.sidebar-tool-item {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 6px var(--space-3);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: all var(--dur-fast) var(--ease);
+}
+.sidebar-tool-item:hover {
+  background: var(--surface-hover);
+}
+.sidebar-tool-item.active {
+  background: var(--primary-soft);
+  border-color: color-mix(in oklch, var(--primary) 24%, transparent);
+}
+.sidebar-tool-item.active .sidebar-tool-name {
+  color: var(--primary);
+}
+.sidebar-tool-name {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--fg);
+}
+.sidebar-tool-meta {
+  font-size: 10px;
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
 /* 会话列表 */
 .session-list { flex: 1; overflow-y: auto; padding: var(--space-1) var(--space-2) var(--space-2); }
 
@@ -486,16 +535,18 @@ body {
 
 /* ============ sidebar 底部紧凑状态条 ============ */
 .sidebar-footer-bar {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: var(--space-2);
+  display: flex; flex-direction: column;
+  gap: 6px;
   padding: var(--space-2) var(--space-4);
   border-top: 1px solid var(--border-subtle);
   background: var(--bg);
   flex-shrink: 0;
 }
-.sidebar-footer-status {
-  display: inline-flex; align-items: center; gap: var(--space-1);
-  font-size: var(--text-xs); color: var(--fg-subtle);
+/* 信息行：状态 · 模型 · 权限 · 上下文%  全部一行，超出截断 */
+.sidebar-footer-info {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 11px; color: var(--fg-subtle);
+  min-width: 0;
 }
 .sidebar-footer-dot {
   width: 6px; height: 6px; border-radius: 50%;
@@ -504,12 +555,21 @@ body {
 .sidebar-footer-dot.ready { background: var(--success); }
 .sidebar-footer-dot.busy { background: var(--warning); animation: pulse 1.4s var(--ease) infinite; }
 .sidebar-footer-dot.error { background: var(--danger); }
-.sidebar-footer-ctx {
-  display: inline-flex; align-items: center; gap: var(--space-1);
-  flex-shrink: 0;
+.sidebar-footer-state { flex-shrink: 0; }
+.sidebar-footer-sep { color: var(--fg-subtle); opacity: 0.5; flex-shrink: 0; }
+.sidebar-footer-model {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; max-width: 90px;
+  font-family: var(--font-mono);
 }
-.sidebar-footer-ctx-bar {
-  width: 60px; height: 3px;
+.sidebar-footer-perm { flex-shrink: 0; }
+.sidebar-footer-pct {
+  flex-shrink: 0;
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+}
+/* 上下文进度条：全宽细条，放在信息行下方 */
+.sidebar-footer-ctxbar {
+  width: 100%; height: 3px;
   background: var(--surface-active); border-radius: var(--radius-full); overflow: hidden;
 }
 .sidebar-footer-ctx-fill {
@@ -519,11 +579,6 @@ body {
 .sidebar-footer-ctx-fill.low { background: var(--success); }
 .sidebar-footer-ctx-fill.mid { background: var(--warning); }
 .sidebar-footer-ctx-fill.high { background: var(--danger); }
-.sidebar-footer-ctx-text {
-  font-size: 10px; color: var(--fg-subtle);
-  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
-  min-width: 28px; text-align: right;
-}
 
 /* ============ 主区 ============ */
 .main {
@@ -560,8 +615,23 @@ body {
   border-radius: 0;
   box-shadow: none;
 }
+/* 导航移到左侧栏后，tools-body 只有执行区，居中、灰底轻卡片、少分隔线 */
 .tool-workbench .tools-body {
   flex-direction: row;
+  justify-content: center;
+}
+.tool-workbench .tools-detail {
+  flex: 1;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-5);
+  background: var(--surface-hover);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+/* 当 hideNav 隐藏 tools-list 后，执行区独占整行居中 */
+.tool-workbench .tools-body:not(:has(.tools-list)) .tools-detail {
+  width: 100%;
 }
 .tool-workbench .tools-list {
   width: 240px;
@@ -570,10 +640,6 @@ body {
   border-right: 1px solid var(--border-subtle);
   border-bottom: 0;
   background: transparent;
-}
-.tool-workbench .tools-detail {
-  min-height: 0;
-  padding: var(--space-4);
 }
 .workspace-files {
   min-width: 0;
@@ -622,15 +688,17 @@ body {
 /* 首页 HT 标识：克制，替代大 emoji */
 .empty-mark {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 40px; height: 40px;
-  border-radius: var(--radius-sm);
-  background: var(--fg); color: var(--bg);
-  font-size: 13px; font-weight: 700; letter-spacing: 0.04em;
-  margin-bottom: var(--space-4);
+  padding: 5px var(--space-3);
+  border-radius: var(--radius-full);
+  background: #E6F3EF;
+  color: #1B6B5C;
+  font-size: 19px; font-weight: 600; letter-spacing: 0.12em;
+  margin-bottom: var(--space-5);
 }
 .empty-state h3 {
-  font-size: 22px; font-weight: 650; margin-bottom: var(--space-1);
-  letter-spacing: -0.01em;
+  font-size: 72px; font-weight: 650; margin-bottom: var(--space-2);
+  letter-spacing: -0.02em;
+  line-height: 1.05;
 }
 .empty-state p {
   color: var(--fg-subtle);
