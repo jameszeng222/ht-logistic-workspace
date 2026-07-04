@@ -145,8 +145,8 @@
   --dur-slow: 0.28s;
 
   /* 布局 */
-  --header-h: 44px;
-  --sidebar-w: 276px;
+  --header-h: 56px;
+  --sidebar-w: 320px;
   --files-w: 326px;
   --content-max: 900px;
 }
@@ -193,7 +193,8 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-1);
+  /* 顶栏上方留白多一点（用户多次要求），下方略少保持紧凑 */
+  padding: var(--space-4) var(--space-3) var(--space-2) var(--space-1);
   background: var(--bg);
   border-bottom: 0;
   -webkit-app-region: drag;
@@ -286,6 +287,23 @@ body {
 .header-status.busy .dot { background: var(--warning); animation: pulse 1.4s var(--ease) infinite; }
 .header-status.error .dot { background: var(--danger); }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* 工作目录按钮：显眼入口，区别于普通 icon-btn */
+.workdir-btn {
+  background: var(--primary-soft);
+  border-color: color-mix(in oklch, var(--primary) 30%, var(--border-subtle));
+  color: var(--primary);
+  font-weight: 500;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workdir-btn:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--primary) 18%, transparent);
+  border-color: var(--primary);
+  color: var(--primary);
+}
 
 .header-spacer { flex: 1; }
 
@@ -468,7 +486,10 @@ body {
   position: relative;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto auto;
-  background: var(--bg); overflow: visible; min-width: 0;
+  /* overflow: hidden 保证 grid 行高约束生效：消息区超出时在自身 .messages 内滚动，
+     不会撑开 .main 把 composer/tool-workbench 挤出视口。
+     下拉框已用 React Portal 渲染到 document.body，不再依赖 .main overflow:visible。 */
+  background: var(--bg); overflow: hidden; min-width: 0;
 }
 .main.main-empty {
   grid-template-rows: minmax(190px, 0.74fr) auto minmax(310px, 0.94fr);

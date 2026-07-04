@@ -1006,6 +1006,21 @@ export default function App() {
           <span className="dot" />
           {ready ? (busy ? "思考中" : "就绪") : "未连接"}
         </span>
+        {/* 工作目录：显眼入口，点击直接选目录并应用。显示当前工作目录末段名。 */}
+        <button
+          className="icon-btn workdir-btn"
+          onClick={async () => {
+            try {
+              const selected = await openDialog({ directory: true, multiple: false, defaultPath: workdir || undefined });
+              if (!selected) return;
+              const dir = Array.isArray(selected) ? selected[0] : selected;
+              if (dir) await applyWorkdir(dir);
+            } catch (e) { toast(`选择目录失败: ${e}`, "error"); }
+          }}
+          title={workdir ? `工作目录：${workdir}（点击切换）` : "设置工作目录（输入输出文件都存这里）"}
+        >
+          📁 {workdir ? (workdir.split(/[\\/]/).pop() || workdir) : "设置工作目录"}
+        </button>
         <div className="header-spacer" />
         {/* 调试日志 */}
         <button className={`icon-btn log-toggle ${stderrCount > 0 ? "has-warn" : ""}`} onClick={() => setShowLogViewer(true)} title="调试日志">
