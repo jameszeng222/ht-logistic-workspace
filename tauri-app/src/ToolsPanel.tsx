@@ -7,7 +7,7 @@
 //
 // 后端：python-sidecar/main.py（FastAPI on 127.0.0.1:8000）
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useMemo, useImperativeHandle, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -31,12 +31,19 @@ interface SidecarStatus {
 
 interface ToolsPanelProps {
   onSendToAssistant?: (message: string) => void;
-  /**
-   * 外部传入的文件路径（如从文件浏览器"用此文件执行工具"按钮）。
-   * 变化时自动：按扩展名匹配工具 → 切换 activeTool → 填入 filePath。
-   * 用 { path, source } 包装，source 是触发源标识（如时间戳），避免同路径重复触发无效。
-   */
-  incomingFile?: { path: string; source: string } | null;
+}
+
+/**
+ * ToolsPanel 对外暴露的命令式 API（通过 ref 调用）。
+ * 用 useImperativeHandle 而非 props 传 state，避免：
+ *   - state 同步时序问题（连续点击会被覆盖）
+ *   - useEffect 依赖 tools 未加载时匹配失败
+ *   - filePath 设置后清除按钮和 incomingFile 状态冲突
+ * 每次 loadFile 调用都是独立命令，直接操作内部 state，可靠且可重复。
+ */
+export interface ToolsPanelHandle {
+  /** 加载文件到工具区，按 toolKind 切换工具并填入 filePath */
+  loadFile: (path: string, toolKind: "invoice" | "data") => void;
 }
 
 const INPUT_FILTERS: Record<ToolDef["input"], { name: string; extensions: string[] }[]> = {
@@ -64,7 +71,7 @@ function workflowLabel(tool: ToolDef): string {
   return "物流工具";
 }
 
-export function ToolsPanel({ onSendToAssistant, incomingFile }: ToolsPanelProps) {
+export const ToolsPanel = forwardRef<ToolsPanelHandle, ToolsPanelProps>(function ToolsPanel({ onSendToAssistant }, ref) {
   const [tools, setTools] = useState<ToolDef[]>([]);
   const [sidecarUrl, setSidecarUrl] = useState("http://127.0.0.1:8000");
   const [sidecarReady, setSidecarReady] = useState(false);
@@ -143,30 +150,32 @@ export function ToolsPanel({ onSendToAssistant, incomingFile }: ToolsPanelProps)
 
   useEffect(() => { refreshTools(); }, [refreshTools]);
 
-  // ============ 接收外部传入文件（文件浏览器"用此文件执行工具"按钮）============
-  // 按 { path, source } 变化触发：匹配扩展名 → 切换 activeTool → 填入 filePath
-  useEffect(() => {
-    if (!incomingFile || !incomingFile.path) return;
-    const p = incomingFile.path;
-    const ext = p.split(".").pop()?.toLowerCase() || "";
-    // 按扩展名匹配工具：
-    //   xlsx/xls → 优先 invoice-packing（单据制作），data-analysis 也可处理
-    //   pdf → customs-extractor/customs-generator（若存在）
-    // 找不到匹配工具时不强行切换，仅填入 filePath，由用户手动选工具
-    let matched: ToolDef | null = null;
-    if (ext === "xlsx" || ext === "xls") {
-      matched = tools.find((t) => t.id === "invoice-packing") || tools.find((t) => t.id === "data-analysis") || null;
-    } else if (ext === "pdf") {
-      matched = tools.find((t) => t.input === "pdf") || null;
-    }
-    if (matched) {
-      setActiveTool(matched);
-    }
-    setFilePath(p);
-    setSavedPath(null);
-    setJsonResult(null);
-    setError(null);
-  }, [incomingFile, tools]);
+  // ============ 命令式 API：供外部 ref 调用 ============
+  // loadFile(path, toolKind)：按 toolKind 找工具 → 切换 activeTool → 填入 filePath
+  // 每次调用都是独立命令，直接操作 state，无 useEffect 副作用链。
+  useImperativeHandle(ref, () => ({
+    loadFile: (path: string, toolKind: "invoice" | "data") => {
+      const p = path.trim();
+      if (!p) return;
+      // 按 toolKind 找对应工具
+      const targetId = toolKind === "invoice" ? "invoice-packing" : "data-analysis";
+      const matched = tools.find((t) => t.id === targetId) || null;
+      if (matched) {
+        setActiveTool(matched);
+      } else {
+        // 工具列表还没加载，按扩展名兜底匹配
+        const ext = p.split(".").pop()?.toLowerCase() || "";
+        const fallback = (ext === "xlsx" || ext === "xls")
+          ? (tools.find((t) => t.id === "invoice-packing") || tools.find((t) => t.id === "data-analysis") || tools[0] || null)
+          : (tools.find((t) => t.input === "pdf") || tools[0] || null);
+        if (fallback) setActiveTool(fallback);
+      }
+      setFilePath(p);
+      setSavedPath(null);
+      setJsonResult(null);
+      setError(null);
+    },
+  }), [tools]);
 
   // ============ 选文件（Tauri 原生对话框）============
   const pickFile = useCallback(async () => {
@@ -383,4 +392,4 @@ export function ToolsPanel({ onSendToAssistant, incomingFile }: ToolsPanelProps)
       </div>
     </div>
   );
-}
+});

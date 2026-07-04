@@ -18,7 +18,7 @@ import { CommandPalette } from "./CommandPalette";
 import { ExtensionManager } from "./ExtensionManager";
 import { rebuildTurnsFromMessages } from "./utils";
 import { ChartView, extractChartConfig } from "./Chart";
-import { ToolsPanel } from "./ToolsPanel";
+import { ToolsPanel, type ToolsPanelHandle } from "./ToolsPanel";
 import { FileBrowser } from "./FileBrowser";
 import type { ToolCall, AssistantMsg, Turn } from "./types";
 import "./styles.css";
@@ -885,15 +885,14 @@ export default function App() {
   }, [toast]);
 
   // ====== 从文件浏览器一键执行工具 ======
-  // 点击"单据"/"数据"按钮：把文件路径塞给 ToolsPanel（incomingFile），
-  // ToolsPanel useEffect 会自动切换工具 + 填入 filePath。
-  // source 用时间戳保证每次点击都触发（即使同文件也能重新填入）。
-  const [pendingToolFile, setPendingToolFile] = useState<{ path: string; source: string } | null>(null);
+  // 点击"单据"/"数据"按钮：通过 toolsPanelRef 命令式调用 loadFile，
+  // 直接操作 ToolsPanel 内部 state，无 state 同步问题，连续点击独立可靠。
+  const toolsPanelRef = useRef<ToolsPanelHandle>(null);
   const runToolFromBrowser = useCallback((path: string, toolKind: "invoice" | "data") => {
     const trimmed = path.trim();
     if (!trimmed) return;
     const fileName = trimmed.split(/[\\/]/).pop() || trimmed;
-    setPendingToolFile({ path: trimmed, source: `${Date.now()}-${toolKind}` });
+    toolsPanelRef.current?.loadFile(trimmed, toolKind);
     toast(`已加载到工具区：${fileName}（${toolKind === "invoice" ? "单据制作" : "数据分析"}）`, "success");
   }, [toast]);
 
@@ -973,11 +972,11 @@ export default function App() {
     const rawMsg = (text ?? input).trim();
     // 支持只发附件：文本为空但有附件时，用默认文案发送
     if (!rawMsg && attachments.length === 0) return;
-    if (busy) { toast("物流助理思考中，请等待当前任务完成或中断后再发送", "info"); return; }
-    if (!ready) { toast("物流助理未连接，请稍候", "info"); return; }
+    if (busy) { toast("Pilot 思考中，请等待当前任务完成或中断后再发送", "info"); return; }
+    if (!ready) { toast("Pilot 未连接，请稍候", "info"); return; }
     // 预览模式下若 pi 正忙，提示用户：续聊需要重启 pi 会中断当前输出
     if (previewPath && previewPath !== sessionFileRef.current && busy) {
-      toast("物流助理正在输出，续聊历史会话会中断当前任务，请先等待或中断", "info"); return;
+      toast("Pilot 正在输出，续聊历史会话会中断当前任务，请先等待或中断", "info"); return;
     }
     // 若处于预览模式（浏览的历史会话 != 当前活动会话），发消息前先真正切换。
     // 关键：用 restart_pi --session <path> 重启 pi 进程来续聊历史会话。
@@ -1042,6 +1041,27 @@ export default function App() {
       ? { ...t, toolCalls: { ...t.toolCalls, [toolId]: { ...t.toolCalls[toolId], expanded: !t.toolCalls[toolId].expanded } } }
       : t));
   };
+
+  // ====== AI 消息操作：复制 + 重新生成 ======
+  const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
+  const copyMessage = useCallback(async (msgId: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedMsgId(msgId);
+      setTimeout(() => setCopiedMsgId((cur) => (cur === msgId ? null : cur)), 1500);
+      toast("已复制到剪贴板", "success");
+    } catch (e) {
+      toast(`复制失败: ${e}`, "error");
+    }
+  }, [toast]);
+  // 重新生成：用同一 turn 的 userMessage 重新发送（Pi 是 append-only，
+  // 会在会话末尾追加新的一轮问答，旧回答保留。这是最简单可靠的"重新生成"）
+  const regenerate = useCallback((userMessage: string) => {
+    if (!userMessage) return;
+    if (busy) { toast("Pilot 思考中，请等待当前任务完成或中断后再重新生成", "info"); return; }
+    if (!ready) { toast("Pilot 未连接，请稍候", "info"); return; }
+    send(userMessage);
+  }, [busy, ready, send, toast]);
 
   // ====== 派生数据 ======
   const contextPercent = sessionStats?.contextUsage?.percent ?? 0;
@@ -1278,9 +1298,9 @@ export default function App() {
             <div className="messages-inner">
               {turns.length === 0 ? (
                 <div className="empty-state">
-                  <div className="empty-icon">📦</div>
-                  <h3>Logistic Workspace</h3>
-                  <p>面向日常单据制作和物流数据分析的本地 AI 工作台。</p>
+                  <div className="empty-icon">👩‍✈️</div>
+                  <h3>HT Logistic Workspace</h3>
+                  <p>你是物流工作台的 AI 调度员 Pilot，优先围绕当前文件、物流工具、单据制作、数据分析完成任务。</p>
                   <div className="empty-suggestions">
                     <button className="suggestion-chip" onClick={() => { setInput("帮我分析这个 Excel 的关键数据和异常点"); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer-shell textarea")?.focus(), 0); }}>📊 分析 Excel 关键数据</button>
                     <button className="suggestion-chip" onClick={() => { setInput("根据这份提单生成装箱单"); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer-shell textarea")?.focus(), 0); }}>📄 根据提单生成装箱单</button>
@@ -1296,7 +1316,7 @@ export default function App() {
                   )}
                   {turn.assistantMsgs.length === 0 && turn.status === "streaming" ? (
                     <div className="msg assistant">
-                      <div className="msg-author"><span className="avatar">📦</span><span className="author-name">物流助理</span></div>
+                      <div className="msg-author"><span className="avatar">👩‍✈️</span><span className="author-name">Pilot</span></div>
                       <div className="msg-content">
                         <div className="msg-bubble assistant-bubble">
                           <span className="thinking-dots"><span className="dot-pulse" /><span className="dot-pulse" /><span className="dot-pulse" /></span>
@@ -1305,7 +1325,7 @@ export default function App() {
                     </div>
                   ) : turn.assistantMsgs.map((msg) => (
                     <div key={msg.id} className={`msg assistant ${msg.streaming ? "streaming" : ""}`}>
-                      <div className="msg-author"><span className="avatar">📦</span><span className="author-name">物流助理</span></div>
+                      <div className="msg-author"><span className="avatar">👩‍✈️</span><span className="author-name">Pilot</span></div>
                       <div className="msg-content">
                         {msg.thinking && (
                           <details className="reasoning">
@@ -1322,6 +1342,23 @@ export default function App() {
                               const tc = turn.toolCalls[tcId];
                               return tc ? <ToolCard key={tcId} tool={tc} onToggle={() => toggleTool(turn.id, tcId)} /> : null;
                             })}
+                          </div>
+                        )}
+                        {/* AI 消息操作：复制 + 重新生成（非 streaming 时显示）*/}
+                        {!msg.streaming && msg.text && (
+                          <div className="msg-actions">
+                            <button
+                              className="msg-action-btn"
+                              onClick={() => copyMessage(msg.id, msg.text)}
+                              title="复制回答"
+                            >{copiedMsgId === msg.id ? "✓ 已复制" : "⧉ 复制"}</button>
+                            {turn.userMessage && (
+                              <button
+                                className="msg-action-btn"
+                                onClick={() => regenerate(turn.userMessage)}
+                                title="基于同一问题重新生成"
+                              >↻ 重新生成</button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1495,7 +1532,7 @@ export default function App() {
             </div>
           </div>
           <section className="tool-workbench">
-            <ToolsPanel onSendToAssistant={(message) => send(message)} incomingFile={pendingToolFile} />
+            <ToolsPanel ref={toolsPanelRef} onSendToAssistant={(message) => send(message)} />
           </section>
         </main>
         <aside className="workspace-files">
