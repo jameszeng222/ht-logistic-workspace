@@ -5,6 +5,7 @@
 // 通过 Rust 命令 list_dir 列目录、open_file 打开、open_in_explorer 定位
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 
 interface DirEntry {
@@ -110,6 +111,19 @@ interface FileBrowserProps {
 
 type BrowserTab = "workspace" | "sessions";
 
+// 右键上下文菜单项
+interface CtxMenuItem {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+}
+interface CtxMenuState {
+  x: number;
+  y: number;
+  items: CtxMenuItem[];
+}
+
 export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool, recentFiles = [], toolOutputs = [] }: FileBrowserProps) {
   const [tab, setTab] = useState<BrowserTab>("workspace");
   const [agentPaths, setAgentPaths] = useState<AgentPaths | null>(null);
@@ -121,6 +135,43 @@ export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool
   const [error, setError] = useState<string | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<DirEntry | null>(null);
   const pathInputRef = useRef<HTMLInputElement>(null);
+  // 右键上下文菜单：在文件行 / 上下文区条目上 right-click 触发
+  const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
+  const closeCtxMenu = useCallback(() => setCtxMenu(null), []);
+  const openCtxMenu = useCallback((e: React.MouseEvent, items: CtxMenuItem[]) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (items.length === 0) return;
+    // 边界处理：避免菜单超出视窗
+    const x = Math.min(e.clientX, window.innerWidth - 200);
+    const y = Math.min(e.clientY, window.innerHeight - items.length * 32 - 16);
+    setCtxMenu({ x, y, items });
+  }, []);
+
+  // 菜单打开时：点击外部 / Esc / 滚动 / 窗口尺寸变化 都关闭
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const onDocClick = () => closeCtxMenu();
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeCtxMenu(); };
+    const onScroll = () => closeCtxMenu();
+    const onResize = () => closeCtxMenu();
+    // 用 mousedown 而非 click，避免点菜单项时先触发外部关闭
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [ctxMenu, closeCtxMenu]);
+
+  // 构建文件右键菜单项：打开/定位 + (Excel) 单据制作/数据分析 + 分析
+  // 注意：handleOpenFile / handleShowInExplorer 在下方定义，这里只引用不调用，
+  // useCallback 的 deps 在渲染时求值，必须等它们定义之后才能放进 deps，
+  // 所以这两个 builder 放到 handleShowInExplorer 之后定义（见下）。
 
   // 加载 agent 路径
   useEffect(() => {
@@ -242,11 +293,43 @@ export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool
     }
   }, [currentPath, navigateTo]);
 
+  // 构建文件右键菜单项：打开/定位 + (Excel) 单据制作/数据分析 + 加入分析
+  const buildFileMenuItems = useCallback((entry: DirEntry): CtxMenuItem[] => {
+    const items: CtxMenuItem[] = [];
+    if (!entry.is_dir) {
+      items.push({ label: "打开", onClick: () => handleOpenFile(entry) });
+    }
+    items.push({ label: "在文件管理器中定位", onClick: () => handleShowInExplorer(entry) });
+    if (!entry.is_dir) {
+      if (onPickFile) {
+        items.push({ label: "加入聊天分析", onClick: () => onPickFile(entry.path) });
+      }
+      if (onRunTool && isExcelFile(entry.name)) {
+        items.push({ label: "单据制作", onClick: () => onRunTool(entry.path, "invoice") });
+        items.push({ label: "数据分析", onClick: () => onRunTool(entry.path, "data") });
+      }
+    }
+    return items;
+  }, [onPickFile, onRunTool, handleOpenFile, handleShowInExplorer]);
+
+  // 构建路径右键菜单项（用于"最近使用 / 工具输出"区，只有路径没有 DirEntry）
+  const buildPathMenuItems = useCallback((path: string): CtxMenuItem[] => {
+    const name = path.split(/[\\/]/).pop() || path;
+    const items: CtxMenuItem[] = [];
+    if (onPickFile) items.push({ label: "加入聊天分析", onClick: () => onPickFile(path) });
+    if (onRunTool && isExcelFile(name)) {
+      items.push({ label: "单据制作", onClick: () => onRunTool(path, "invoice") });
+      items.push({ label: "数据分析", onClick: () => onRunTool(path, "data") });
+    }
+    return items;
+  }, [onPickFile, onRunTool]);
+
   const breadcrumbs = currentPath ? splitPath(currentPath) : [];
 
   return (
     <div className={`file-browser ${compact ? "compact" : ""}`}>
-      {/* 上下文区：最近使用 + 工具输出（在文件浏览之上，体现"工作台上下文"）*/}
+      {/* 上下文区：最近使用 + 工具输出（在文件浏览之上，体现"工作台上下文"）
+          仅展示文件名 + 图标；所有动作（分析/单据/数据）走右键菜单，避免按钮拥挤 */}
       {(recentFiles.length > 0 || toolOutputs.length > 0) && (
         <div className="fb-context">
           {recentFiles.length > 0 && (
@@ -255,20 +338,14 @@ export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool
               {recentFiles.slice(0, 3).map((p, i) => {
                 const name = p.split(/[\\/]/).pop() || p;
                 return (
-                  <div key={`r${i}`} className="fb-context-item" title={p}>
+                  <div
+                    key={`r${i}`}
+                    className="fb-context-item"
+                    title={`${p}（右键更多操作）`}
+                    onContextMenu={(e) => openCtxMenu(e, buildPathMenuItems(p))}
+                  >
                     <span className="fb-context-icon">{getFileIcon(name)}</span>
                     <span className="fb-context-name">{name}</span>
-                    <span className="fb-context-actions" onClick={(e) => e.stopPropagation()}>
-                      {onRunTool && isExcelFile(name) && (
-                        <button className="fb-ctx-btn" onClick={() => onRunTool(p, "invoice")} title="单据">单</button>
-                      )}
-                      {onRunTool && isExcelFile(name) && (
-                        <button className="fb-ctx-btn" onClick={() => onRunTool(p, "data")} title="数据">析</button>
-                      )}
-                      {onPickFile && (
-                        <button className="fb-ctx-btn fb-ctx-btn-primary" onClick={() => onPickFile(p)} title="分析">析</button>
-                      )}
-                    </span>
                   </div>
                 );
               })}
@@ -280,14 +357,14 @@ export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool
               {toolOutputs.map((o, i) => {
                 const name = o.path.split(/[\\/]/).pop() || o.path;
                 return (
-                  <div key={`t${i}`} className="fb-context-item" title={`${o.toolName} → ${o.path}`}>
+                  <div
+                    key={`t${i}`}
+                    className="fb-context-item"
+                    title={`${o.toolName} → ${o.path}（右键加入分析）`}
+                    onContextMenu={(e) => openCtxMenu(e, buildPathMenuItems(o.path))}
+                  >
                     <span className="fb-context-icon">{getFileIcon(name)}</span>
                     <span className="fb-context-name">{name}</span>
-                    <span className="fb-context-actions" onClick={(e) => e.stopPropagation()}>
-                      {onPickFile && (
-                        <button className="fb-ctx-btn fb-ctx-btn-primary" onClick={() => onPickFile(o.path)} title="加入分析">析</button>
-                      )}
-                    </span>
                   </div>
                 );
               })}
@@ -396,6 +473,7 @@ export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool
                 className={`fb-entry ${entry.is_dir ? "dir" : "file"} ${selectedEntry?.path === entry.path ? "selected" : ""}`}
                 onClick={() => handleEntryClick(entry)}
                 onDoubleClick={() => { if (!entry.is_dir && onPickFile) onPickFile(entry.path); }}
+                onContextMenu={(e) => openCtxMenu(e, buildFileMenuItems(entry))}
                 draggable={!entry.is_dir}
                 onDragStart={(e) => {
                   if (entry.is_dir) return;
@@ -404,7 +482,7 @@ export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool
                   e.dataTransfer.setData("application/x-file-path", entry.path);
                   e.dataTransfer.effectAllowed = "copy";
                 }}
-                title={!entry.is_dir ? `${entry.name}（双击或拖拽到聊天框分析）` : entry.name}
+                title={!entry.is_dir ? `${entry.name}（双击分析 · 右键更多操作）` : entry.name}
               >
                 <span className="fb-col-name">
                   <span className="fb-entry-icon">{entry.is_dir ? "📁" : getFileIcon(entry.name)}</span>
@@ -412,29 +490,8 @@ export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool
                 </span>
                 {!compact && <span className="fb-col-size">{formatSize(entry.size)}</span>}
                 {!compact && <span className="fb-col-modified">{formatDate(entry.modified)}</span>}
+                {/* 行内只保留"打开/定位"两个常用动作；"单据/数据/分析"改右键菜单 */}
                 <span className="fb-col-actions" onClick={(e) => e.stopPropagation()}>
-                  {/* Excel 文件：显示"单据"/"数据"按钮，直接交给工具区执行对应工具 */}
-                  {!entry.is_dir && onRunTool && isExcelFile(entry.name) && (
-                    <>
-                      <button
-                        className="fb-action-btn fb-action-tool"
-                        onClick={() => onRunTool(entry.path, "invoice")}
-                        title="用此文件执行单据制作工具"
-                      >单据</button>
-                      <button
-                        className="fb-action-btn fb-action-tool"
-                        onClick={() => onRunTool(entry.path, "data")}
-                        title="用此文件执行数据分析工具"
-                      >数据</button>
-                    </>
-                  )}
-                  {!entry.is_dir && onPickFile && (
-                    <button
-                      className="fb-action-btn fb-action-primary"
-                      onClick={() => onPickFile(entry.path)}
-                      title="加入聊天框让 AI 分析"
-                    >分析</button>
-                  )}
                   {!entry.is_dir && (
                     <button
                       className="fb-action-btn"
@@ -467,6 +524,27 @@ export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool
           <span className="fb-status-selected">· 已选：{selectedEntry.name}</span>
         )}
       </div>
+
+      {/* 右键上下文菜单（Portal 到 body，脱离父容器裁切）*/}
+      {ctxMenu && createPortal(
+        <div
+          className="fb-ctx-menu"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {ctxMenu.items.map((item, i) => (
+            <button
+              key={i}
+              className={`fb-ctx-menu-item ${item.danger ? "danger" : ""}`}
+              disabled={item.disabled}
+              onClick={() => { item.onClick(); closeCtxMenu(); }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

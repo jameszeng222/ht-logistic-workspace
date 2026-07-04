@@ -57,7 +57,9 @@
   --bg:            oklch(0.955 0.002 260);
   --bg-elevated:   oklch(1 0 0);
   --bg-overlay:    oklch(0.99 0.001 260);
-  --surface:       oklch(1 0 0);
+  /* surface 与 bg 同色，避免面板/按钮形成"白色色块"；
+     需要浮起的元素（聊天框、下拉、命令面板）改用 --bg-elevated */
+  --surface:       oklch(0.955 0.002 260);
   --surface-hover: oklch(0.965 0.003 260);
   --surface-active:oklch(0.94 0.004 260);
 
@@ -875,7 +877,8 @@ body {
 .composer-shell {
   max-width: var(--content-max);
   margin: 0 auto;
-  background: var(--surface);
+  /* 聊天输入框是唯一保留的"白色色块"，用 elevated 维持层次 */
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-sm);
@@ -989,7 +992,7 @@ body {
 .model-dropdown-wrap { position: relative; display: inline-flex; }
 .model-dropdown-portal {
   position: fixed;
-  background: var(--surface);
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-xl);
@@ -1127,7 +1130,7 @@ body {
 }
 @keyframes fadeIn { from { opacity: 0; } }
 .modal {
-  background: var(--surface);
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   padding: var(--space-6);
@@ -1371,7 +1374,7 @@ body {
 /* ============ 斜杠命令面板 ============ */
 .cmd-palette {
   max-width: var(--content-max); margin: 0 auto var(--space-2);
-  background: var(--surface); border: 1px solid var(--border);
+  background: var(--bg-elevated); border: 1px solid var(--border);
   border-radius: var(--radius-md); box-shadow: var(--shadow-md);
   overflow: hidden; max-height: 280px; overflow-y: auto;
   animation: cmd-in var(--dur) var(--ease-out);
@@ -2490,7 +2493,7 @@ body {
   gap: var(--space-2);
   padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--border-subtle);
-  background: var(--surface);
+  background: transparent;
   flex-shrink: 0;
 }
 .fb-context-group {
@@ -2531,46 +2534,53 @@ body {
   font-size: var(--text-xs);
   color: var(--fg);
 }
-.fb-context-actions {
+
+/* 右键上下文菜单（Portal 到 body） */
+.fb-ctx-menu {
+  position: fixed;
+  z-index: 5000;
+  min-width: 168px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xl);
+  padding: var(--space-1);
   display: flex;
-  gap: 3px;
-  flex-shrink: 0;
+  flex-direction: column;
+  gap: 1px;
+  animation: fb-ctx-in var(--dur-fast) var(--ease-out);
+  user-select: none;
 }
-/* 上下文区小动作按钮：紧凑、文字单字、悬浮显现 */
-.fb-ctx-btn {
-  min-width: 22px;
-  height: 22px;
-  padding: 0 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 500;
+@keyframes fb-ctx-in {
+  from { transform: scale(0.96); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+.fb-ctx-menu-item {
+  text-align: left;
   background: transparent;
-  border: 1px solid var(--border-subtle);
+  border: none;
   border-radius: var(--radius-sm);
-  color: var(--fg-muted);
+  padding: 7px var(--space-3);
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  color: var(--fg);
   cursor: pointer;
-  opacity: 0.7;
-  transition: all var(--dur-fast) var(--ease);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
-.fb-context-item:hover .fb-ctx-btn {
-  opacity: 1;
-}
-.fb-ctx-btn:hover {
-  border-color: var(--success);
-  color: var(--success);
-  background: color-mix(in oklch, var(--success) 10%, transparent);
-}
-/* primary：用于"分析/加入分析"（交给聊天框作附件），用 primary 色调 */
-.fb-ctx-btn.fb-ctx-btn-primary {
-  border-color: color-mix(in oklch, var(--primary) 30%, var(--border-subtle));
+.fb-ctx-menu-item:hover:not(:disabled) {
+  background: var(--surface-hover);
   color: var(--primary);
 }
-.fb-ctx-btn.fb-ctx-btn-primary:hover {
-  border-color: var(--primary);
-  background: var(--primary-soft);
-  color: var(--primary);
+.fb-ctx-menu-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.fb-ctx-menu-item.danger {
+  color: var(--danger);
+}
+.fb-ctx-menu-item.danger:hover {
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  color: var(--danger);
 }
 
 .file-browser.compact .fb-tabs {
