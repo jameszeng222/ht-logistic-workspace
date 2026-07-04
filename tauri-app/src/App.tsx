@@ -471,7 +471,7 @@ export default function App() {
         break;
       case "extension_ui_request":
         handleUiRequest(ev as any);
-        addLog("event", `ui_request · ${(ev as any).method}`);
+        addLog("event", `ui_request · ${(ev as any).method} · ${(ev as any).title || ""} · ${(ev as any).message || ""}`);
         break;
       case "compaction_end":
         refreshState(); refreshStats();
@@ -481,6 +481,10 @@ export default function App() {
         setReady(false); setBusy(false);
         toast("Pi 进程退出", "error");
         addLog("event", "pi_process_exit · 进程退出");
+        break;
+      default:
+        // 捕获未知事件类型（如 Pi 内置的 permission_request 等），记录日志便于排查
+        addLog("event", `unknown · ${(ev as any).type} · ${JSON.stringify(ev).slice(0, 200)}`);
         break;
     }
   }, [appendText, appendThinking, flushText, toast, refreshState, refreshStats, addLog, autoNameSession, refreshSessions]);
@@ -499,26 +503,32 @@ export default function App() {
       const destructiveKeywords = ["删除", "移除", "清空", "卸载", "格式化", "覆盖", "delete", "remove", "rm ", "drop ", "truncate", "uninstall", "overwrite", "rmdir", "del "];
       const isDestructive = destructiveKeywords.some((k) => text.includes(k));
       // 安全只读操作关键字：读取/查看/列表/查询/搜索/检查 + read/list/search/view/get/show/check/glob/grep
-      const safeKeywords = ["读取", "查看", "列表", "查询", "搜索", "检查", "显示", "获取", "read", "list", "search", "view", "show", "check", "glob", "grep", "ls ", "cat ", "head ", "tail ", "find ", "stat"];
+      const safeKeywords = ["读取", "查看", "列表", "查询", "搜索", "检查", "显示", "获取", "read", "list", "search", "view", "show", "check", "glob", "grep", "ls ", "cat ", "head ", "tail ", "find ", "stat", "ffgrep", "ffind", "ffls", "ffcat", "ffread"];
       const isSafe = safeKeywords.some((k) => text.includes(k));
+      const autoApprove = (reason: string) => {
+        invoke("send_command", { command: { type: "extension_ui_response", id: ev.id, confirmed: true, cancelled: false } })
+          .catch((e) => addLog("event", `auto-approve 失败: ${e}`));
+        addLog("event", `auto-approve · ${mode} · ${reason} · ${ev.title || ""} · ${ev.message || ""}`);
+      };
+      addLog("event", `confirm_recv · mode=${mode} · destructive=${isDestructive} · safe=${isSafe} · title="${ev.title || ""}" · msg="${ev.message || ""}"`);
       if (mode === "trust") {
         // 全信任：所有 confirm 自动放行
-        invoke("send_command", { command: { type: "extension_ui_response", id: ev.id, confirmed: true, cancelled: false } });
+        autoApprove("全信任");
         return;
       }
       if (mode === "workspace" && !isDestructive) {
         // 工作台：非破坏性操作自动放行，破坏性操作仍弹窗
-        invoke("send_command", { command: { type: "extension_ui_response", id: ev.id, confirmed: true, cancelled: false } });
+        autoApprove("工作台非破坏");
         return;
       }
       if (mode === "cautious" && isSafe && !isDestructive) {
         // 审慎：安全的只读操作也自动放行，只有写/修改/破坏性操作弹窗
-        invoke("send_command", { command: { type: "extension_ui_response", id: ev.id, confirmed: true, cancelled: false } });
+        autoApprove("审慎只读");
         return;
       }
     }
     setUiRequest({ ev, inputValue: "", selectIndex: 0 });
-  }, []);
+  }, [addLog]);
   const respondUiRequest = useCallback((payload: any) => {
     if (!uiRequest) return;
     const finalPayload = { type: "extension_ui_response", id: uiRequest.ev.id, ...payload };
