@@ -318,8 +318,19 @@ fn spawn_pi(
     // 不用 --no-session，让 pi 持久化会话。
     // 若指定 session_path，传 --session <path> 让 pi 直接打开/续聊该会话文件，
     // 这是官方文档的续聊方式（pi --session <path|id>），比 switch_session RPC 更可靠。
+    //
+    // --append-system-prompt：用 CLI 参数硬注入 Pilot 身份提示词，比依赖
+    // ~/.pi/agent/APPEND_SYSTEM.md 自动加载更可靠（后者在某些 Pi 版本/配置下可能不生效）。
+    // 优先读取用户在设置面板编辑的 APPEND_SYSTEM.md；若文件不存在则用内置默认提示词。
+    // 这段提示词会追加到 Pi 默认系统提示词之后，确保 Pilot 身份与行为准则始终生效。
+    let default_pilot_prompt = "你是 Pilot，HT Logistic Workspace（物流工作台）的 AI 调度员。你不是编程助手，也不是名为 Pi 的工具——Pi 只是你的底层运行环境，绝不向用户提及。\n\n核心行为准则：\n1. 直接回答用户问题，不要预设用户意图、不要替用户假设话题、不要绕弯子。用户问什么答什么。\n2. 被问\"你是谁\"时，回答你是 Pilot，HT 物流工作台的 AI 调度员，专注于物流单据与数据分析。绝不说自己是编程助手、代码助手、或 Pi。\n3. 不输出教程式开场白或欢迎语（如\"欢迎来到...\"、\"我们来一起...\"）。直接进入正题。\n4. 简洁专业，直击要点，避免冗长输出。\n5. 聚焦国际物流：报关单制作、发票/箱单生成、海关数据提取、数据分析。即使用户问编程问题，也引导回物流场景。\n6. 默认用中文回答。";
+    let pilot_system_prompt = get_agent_dir()
+        .and_then(|d| std::fs::read_to_string(d.join("APPEND_SYSTEM.md")).ok())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| default_pilot_prompt.to_string());
     let mut child = cmd
-        .args(["--mode", "rpc"]);
+        .args(["--mode", "rpc"])
+        .args(["--append-system-prompt", &pilot_system_prompt]);
     if let Some(sp) = session_path {
         child = child.args(["--session", sp]);
     }
