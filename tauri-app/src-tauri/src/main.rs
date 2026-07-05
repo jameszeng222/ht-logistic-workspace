@@ -50,6 +50,43 @@ fn find_pi() -> Option<std::path::PathBuf> {
     } else {
         vec!["pi"]
     };
+
+    // 1. 优先：打包内嵌的 pi-runtime（傻瓜包模式，用户无需装 Node.js / npm）。
+    //    打包时把便携版 node + pi 包放在 resource_dir/pi-runtime/ 下，
+    //    pi-runtime/pi.cmd (Windows) 或 pi-runtime/pi (macOS/Linux) 是启动脚本，
+    //    内部调用 pi-runtime/node.exe 运行 pi-runtime/node_modules/@earendil-works/pi-coding-agent。
+    //    用 current_exe 向上查找 + resource_dir 查找两路定位。
+    let mut runtime_candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let mut cur: Option<&std::path::Path> = Some(exe_dir);
+            for _ in 0..6 {
+                if let Some(d) = cur {
+                    runtime_candidates.push(d.join("pi-runtime"));
+                    cur = d.parent();
+                } else { break; }
+            }
+        }
+    }
+    // 开发模式：从 CARGO_MANIFEST_DIR 或当前工作目录向上找
+    if let Ok(cwd) = std::env::current_dir() {
+        runtime_candidates.push(cwd.join("pi-runtime"));
+        if let Some(parent) = cwd.parent() {
+            runtime_candidates.push(parent.join("pi-runtime"));
+        }
+    }
+    for rt_dir in &runtime_candidates {
+        if !rt_dir.is_dir() { continue; }
+        for cand in &candidates {
+            let full = rt_dir.join(cand);
+            if full.is_file() {
+                eprintln!("[pi] 使用打包内嵌 pi-runtime: {}", full.display());
+                return Some(full);
+            }
+        }
+    }
+
+    // 2. 系统 PATH 查找（用户自己装了 pi）
     if let Ok(path_var) = std::env::var("PATH") {
         for dir in path_var.split(if cfg!(windows) { ';' } else { ':' }) {
             for cand in &candidates {
@@ -60,6 +97,7 @@ fn find_pi() -> Option<std::path::PathBuf> {
             }
         }
     }
+    // 3. Windows npm 全局目录
     if cfg!(windows) {
         if let Ok(appdata) = std::env::var("APPDATA") {
             let npm_dir = PathBuf::from(&appdata).join("npm");

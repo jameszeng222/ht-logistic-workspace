@@ -9,6 +9,8 @@ python-sidecar/*.egg-info/
 # PyInstaller 打包产物（构建时生成，不提交）
 python-sidecar/ht-sidecar
 python-sidecar/ht-sidecar.exe
+# pi-runtime（构建时下载便携 Node + pi 包，不提交）
+pi-runtime/
 
 # Tauri / Node
 tauri-app/node_modules/
