@@ -367,7 +367,7 @@ body {
 .body.sidebar-hidden .sidebar { display: none; }
 /* 空状态：消息区缩小、工具区适度放大（卡片跟随内容高度，行高不再过度膨胀）*/
 .body:has(.main.main-empty) {
-  grid-template-rows: minmax(220px, 0.78fr) minmax(220px, 0.5fr) auto;
+  grid-template-rows: minmax(220px, 0.78fr) minmax(240px, 0.5fr) auto;
 }
 
 /* ============ 侧栏 ============ */
@@ -621,7 +621,7 @@ body {
   border-top: 1px solid var(--border-subtle);
   /* 顶部留白加大，把执行卡片往下推；底部留白收紧避免卡片下方空白 */
   padding: var(--space-4) var(--space-6) var(--space-2);
-  max-height: 260px;
+  max-height: 320px;
 }
 /* 工具面板：去白背景，与主背景融合。仅用细分隔线区隔，无卡片边框/阴影。 */
 .tool-workbench .tools-panel {
@@ -664,7 +664,7 @@ body {
 }
 .tool-workbench .tools-list {
   width: 240px;
-  max-height: 260px;
+  max-height: 320px;
   overflow-y: auto;
   border-right: 1px solid var(--border-subtle);
   border-bottom: 0;
@@ -703,6 +703,15 @@ body {
   padding: var(--space-2) 0 var(--space-6);
   display: flex; flex-direction: column; gap: var(--space-6);
 }
+/* 会话切换中 loading：居中三点 + 文案 */
+.messages-loading {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-10) 0;
+  color: var(--fg-muted);
+}
+.messages-loading .thinking-dots { display: inline-flex; gap: 4px; }
+.messages-loading-text { font-size: var(--text-sm); }
 
 /* 空状态 */
 .empty-state {
@@ -2244,7 +2253,7 @@ body {
     display: none;
   }
   .tool-workbench {
-    max-height: 260px;
+    max-height: 320px;
   }
   .tool-workbench .tools-body {
     flex-direction: column;

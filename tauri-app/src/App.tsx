@@ -188,6 +188,8 @@ export default function App() {
   const messagesRef = useRef<HTMLDivElement>(null);
   const [autoFollow, setAutoFollow] = useState(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  // 会话切换中的 loading 状态：重建历史 + Markdown 渲染较重，先显示 loading 再加载
+  const [switching, setSwitching] = useState(false);
   const currentTurnId = useRef<string | null>(null);
   const currentMsgId = useRef<string | null>(null);
   // 跟踪 Pi 当前 sessionFile 的最新值，供 scan_sessions 作为权威路径提示反推会话根目录。
@@ -730,7 +732,15 @@ export default function App() {
     // 这样不打断当前会话的 agent 输出（Pi 单进程单活动会话，
     // switch_session 会切走活动会话导致原会话输出丢失）。
     // 真正的 switch_session 推迟到用户发新消息时（见 send）。
+    //
+    // 性能：会话历史重建 + 全量 Markdown 渲染是同步重活，直接 setTurns
+    // 会阻塞主线程导致点击后卡顿。先清空 turns 并显示 loading，让浏览器
+    // 渲染一帧，再异步读取+重建，UI 立即响应。
+    setTurns([]);
+    setSwitching(true);
     try {
+      // 让 loading 先渲染一帧
+      await new Promise((r) => requestAnimationFrame(r));
       const data = await invoke<{ messages: any[] }>("read_session_history", { path });
       const msgs = data?.messages || [];
       const rebuilt = rebuildTurnsFromMessages(msgs);
@@ -741,6 +751,8 @@ export default function App() {
       setPreviewPath(path);
     } catch (e) {
       toast(`读取会话历史失败: ${e}`, "error");
+    } finally {
+      setSwitching(false);
     }
   }, [toast]);
 
@@ -1114,6 +1126,11 @@ export default function App() {
   });
   const stderrCount = logs.filter((l) => l.type === "stderr").length;
   const currentSessionName = piState?.sessionName || "";
+  // 预览历史会话时，标题条显示被预览会话的名称（而非当前活动会话名）。
+  const previewSession = previewPath && previewPath !== currentSessionPath
+    ? sessions.find((s) => s.path === previewPath)
+    : null;
+  const titlebarName = (previewSession?.title || previewSession?.name) || currentSessionName || "";
   // 会话搜索过滤（匹配文件名 / 首条消息标题 / 工作目录）
   const filteredSessions = sessionSearch.trim()
     ? sessions.filter((s) => {
@@ -1348,15 +1365,20 @@ export default function App() {
         <main className={`main ${turns.length === 0 ? "main-empty" : ""}`}>
           <div className="messages" ref={messagesRef} onScroll={handleScroll}>
             {/* 标题条：仅在有对话或已命名会话时显示，新会话空状态不显示 */}
-            {(turns.length > 0 || currentSessionName) && (
+            {(turns.length > 0 || currentSessionName || previewSession) && (
               <div className="chat-titlebar">
-                <span className="chat-titlebar-name" title={currentSessionName || undefined}>
-                  {currentSessionName || "新会话"}
+                <span className="chat-titlebar-name" title={titlebarName || undefined}>
+                  {titlebarName || "新会话"}
                 </span>
               </div>
             )}
             <div className="messages-inner">
-              {turns.length === 0 ? (
+              {switching ? (
+                <div className="messages-loading">
+                  <span className="thinking-dots"><span className="dot-pulse" /><span className="dot-pulse" /><span className="dot-pulse" /></span>
+                  <span className="messages-loading-text">加载会话历史…</span>
+                </div>
+              ) : turns.length === 0 ? (
                 <div className="empty-state">
                   <div className="empty-mark">HT LOGISTIC AGENT</div>
                   <h3>Logistic Workspace</h3>
