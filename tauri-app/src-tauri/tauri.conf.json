@@ -40,6 +40,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "createUpdaterArtifacts": true,
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico",
@@ -49,6 +50,19 @@
       },
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "dialog": false,
+      "endpoints": [
+        "https://github.com/jameszeng222/ht-logistic-workspace/releases/latest/download/latest.json"
+      ],
+      "pubkey": "REPLACE_WITH_YOUR_PUBKEY",
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

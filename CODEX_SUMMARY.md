@@ -6,7 +6,7 @@
 
 ## 1. 项目一句话
 
-HT Logistic Workspace 是一个**本地桌面物流 AI 工作台**：Tauri v2 + React 做客户端，Rust 管 Pi RPC 子进程和本地文件/会话，Python FastAPI sidecar 承载 Excel/PDF 物流工具，Pi extension 把工具暴露给 AI agent 调用。
+HT Logistic Workspace 是一个**本地桌面物流 AI 工作台**：Tauri v2 + React 做客户端，Rust 管 Pi RPC 子进程和本地文件/会话，Python FastAPI sidecar 承载 Excel/PDF 物流工具，Pi extension 把工具暴露给 AI agent 调用。**已支持傻瓜包分发**（内嵌 Python sidecar + 便携 Node.js + pi 包，用户双击安装即用）和**手动检查更新**（基于 Tauri updater + GitHub Release）。
 
 **产品方向（用户明确强调）**：不要做成泛 AI 聊天页面，要做成「物流工具 + AI 助手 + 文件侧栏」同屏工作台。高频业务是**单据制作**和**数据分析**，报关处理不是当前重点。
 
@@ -23,6 +23,8 @@ HT Logistic Workspace 是一个**本地桌面物流 AI 工作台**：Tauri v2 + 
 
 **视觉风格**：Codex/轻客户端调性，浅色默认，少分隔线，多用留白、圆角、hover 状态和轻阴影。支持深色/浅色主题切换（顶栏 ☀️/🌙 按钮）。
 
+**设置面板**：工作目录、扩展技能、模型配置、错误处理、工具权限模式、Agent 人设/系统提示词、**关于与更新**（检查更新按钮 + 版本号显示 + 下载进度条）。
+
 ---
 
 ## 3. 技术栈
@@ -32,18 +34,28 @@ HT Logistic Workspace 是一个**本地桌面物流 AI 工作台**：Tauri v2 + 
 - React 18 + Vite 5 + TypeScript
 - `@tauri-apps/plugin-dialog`（原生文件/目录选择）
 - `@tauri-apps/plugin-fs`（读本地文件为字节数组）
+- `@tauri-apps/plugin-updater`（自动更新：检查/下载/签名校验）
+- `@tauri-apps/plugin-process`（更新后 relaunch 重启应用）
 - `react-markdown` + `remark-gfm` + `chart.js` + `react-chartjs-2`
 
 ### 工具 sidecar
 - Python 3.10+（推荐 3.11/3.12，3.13+ 在 Windows 可能缺预编译 wheel）
 - FastAPI on `127.0.0.1:8000`
 - pandas / openpyxl / pdfplumber / pytesseract（OCR 可选）
+- **PyInstaller onefile 模式打包为 `ht-sidecar.exe`**，运行时解压到临时目录
 
 ### Agent / Pi
-- Pi 以 `pi --mode rpc` 由 Tauri Rust 主进程启动
+- Pi 以 `pi --mode rpc --append-system-prompt <Pilot身份提示词>` 由 Tauri Rust 主进程启动
 - `pi --session <path>` 用于续聊历史会话（restart_pi 命令）
+- **傻瓜包模式**：便携 Node.js + pi 包内嵌到安装包的 `pi-runtime/` 目录，`find_pi()` 优先查这里
 - Pi extension: `~/.pi/agent/extensions/all-in-one.ts`
-- Agent 配置: `~/.pi/agent/SYSTEM.md` + `~/.pi/agent/skills/`
+- Agent 配置: `~/.pi/agent/SYSTEM.md` + `~/.pi/agent/skills/` + `~/.pi/agent/APPEND_SYSTEM.md`（Pilot 身份提示词）
+
+### 打包与分发
+- **Windows**: NSIS installer（`perMachine` 安装模式，SimpChinese+English 双语言）
+- **macOS/Linux**: DMG / AppImage / DEB（由 `build-installer.sh` 处理）
+- **pi-runtime**: 便携 Node.js + npm install pi 包 + 生成 `pi.cmd`/`pi` 启动脚本
+- **updater 签名**: Tauri 内置 minisign 签名，构建时用 `TAURI_PRIVATE_KEY` 环境变量签名 setup.exe
 
 ---
 
@@ -53,24 +65,30 @@ HT Logistic Workspace 是一个**本地桌面物流 AI 工作台**：Tauri v2 + 
 ht-logistic-workspace/
 ├── tauri-app/
 │   ├── src/
-│   │   ├── App.tsx              # 主界面（1891 行）：会话/chat/工具区/文件侧栏/设置
-│   │   ├── styles.css           # 全局样式（2428 行）：双主题 + 布局 + 组件
-│   │   ├── FileBrowser.tsx      # 文件浏览器（396 行）：双 tab + 拖拽 + 分析按钮
-│   │   ├── ToolsPanel.tsx       # 物流工具区（355 行）：选文件→调 sidecar→保存→解读
+│   │   ├── App.tsx              # 主界面：会话/chat/工具区/文件侧栏/设置/更新检查
+│   │   ├── styles.css           # 全局样式：双主题 + 布局 + 组件
+│   │   ├── FileBrowser.tsx      # 文件浏览器：双 tab + 拖拽 + 分析按钮
+│   │   ├── ToolsPanel.tsx       # 物流工具区：选文件→调 sidecar→保存→解读
 │   │   ├── Markdown.tsx         # Markdown 渲染（含 GFM、代码高亮）
 │   │   ├── Chart.tsx            # chart.js 图表渲染
 │   │   ├── CommandPalette.tsx   # 斜杠命令面板
 │   │   ├── ExtensionManager.tsx # Pi 扩展管理
 │   │   ├── pi-client.ts         # Pi 事件类型定义
 │   │   ├── types.ts             # 共享类型
-│   │   └── utils.ts             # rebuildTurnsFromMessages 等工具
-│   ├── src-tauri/src/main.rs    # Rust 后端（1382 行）：Pi RPC + sidecar + 文件命令
+│   │   ├── utils.ts             # rebuildTurnsFromMessages / isTutorialWelcome（教程过滤）
+│   │   └── updater.ts           # 自动更新封装：checkUpdate / downloadAndInstallUpdate
+│   ├── src-tauri/
+│   │   ├── src/main.rs          # Rust 后端：Pi RPC + sidecar + 文件命令 + updater 插件注册
+│   │   ├── capabilities/default.json  # 权限配置（含 updater:default / process:default）
+│   │   ├── tauri.conf.json      # Tauri 配置（含 plugins.updater + bundle.resources + createUpdaterArtifacts）
+│   │   └── Cargo.toml           # 含 tauri-plugin-updater / tauri-plugin-process
 │   ├── package.json             # 注意：npm 命令必须在此目录运行
 │   └── vite.config.ts
 ├── python-sidecar/
 │   ├── main.py                  # FastAPI 入口
+│   ├── ht-sidecar.spec          # PyInstaller 打包配置（datas 只打包存在的目录）
 │   ├── tools/                   # 工具实现（纯函数：输入 bytes，输出 bytes/JSON）
-│   │   ├── invoice_packing.py
+│   │   ├── invoice_packing.py   # 引用 tools/templates/（用户提供的 Excel 模板）
 │   │   ├── data_analysis.py
 │   │   ├── customs_generator.py
 │   │   ├── customs_extractor.py
@@ -83,6 +101,10 @@ ht-logistic-workspace/
 ├── pi-agent-config/
 │   ├── SYSTEM.md
 │   └── skills/
+├── scripts/
+│   ├── build-installer.ps1      # Windows 一键打包（sidecar + pi-runtime + NSIS + latest.json）
+│   ├── build-installer.sh       # macOS/Linux 一键打包
+│   └── install-python.ps1
 ├── PROJECT_HANDOFF.md           # 原始交接文档（产品方向 + 约束）
 ├── CODEX_SUMMARY.md             # 本文件
 ├── dev.ps1                      # 一键启动（sidecar + tauri dev）
@@ -93,49 +115,42 @@ ht-logistic-workspace/
 
 ## 5. 最近迭代成果（按时间倒序）
 
-最近 4 个 commit 是本轮工作的核心，已全部推送到 `origin/main`。
+### 本轮：自动更新 + 打包流程完善
 
-### commit `a962816` — 代码审查修复 + UI 美学升级（16 项）
+**自动更新（手动检查模式）**：
+- 接入 `tauri-plugin-updater` + `tauri-plugin-process`
+- `tauri.conf.json` 加 `plugins.updater` 配置（endpoint 指向 GitHub Release latest.json）
+- `capabilities/default.json` 加 `updater:default` + `process:default` 权限
+- 前端 `src/updater.ts` 封装 checkUpdate / downloadAndInstallUpdate（含进度回调 + relaunch）
+- App.tsx 设置面板加"关于与更新"区块：当前版本 + 检查更新按钮 + 发现新版本/下载进度/错误状态 UI
+- `build-installer.ps1` / `.sh` 末尾生成 `latest.json`（含 version/notes/pub_date/platforms.signature/url）
+- `tauri.conf.json` 设 `createUpdaterArtifacts: true`，构建自动生成 `.sig` 签名文件
 
-**Bug 修复（4 项）**：
-1. `applyWorkdir` 重启 pi 后追加 `await loadHistory()` 同步历史，避免工作目录切换后界面空白
-2. `--header-h` 56→60px，与实际顶栏高度对齐（影响 `.app` grid 行高）
-3. workdir 末尾分隔符 `replace(/[\\/]+$/, "")` 后再 split，修复 `C:\Users\` 返回空字符串
-4. `send()` 对 busy/未连接/预览态给出友好 toast，避免用户不知道为何没反应
+**打包流程修复（Windows NSIS）**：
+- `resources` 用 glob `ht-sidecar*` 适配跨平台（Linux 无 .exe 后缀）
+- `targets` 改为 `["nsis"]`，跳过 WiX MSI 打包失败的坑
+- pi-runtime 复制到短路径 `C:\ht-build\pi-runtime\` 绕过 NSIS MAX_PATH 260 限制
+- spec 文件 datas 只打包实际存在的目录（`tools/templates/` 缺失时跳过）
+- 清理 pi-runtime 里的 `.d.ts`/`.ts`/`.map`/测试文件（aws-sdk 等路径超 MAX_PATH）
+- pyinstaller/npm 输出重定向到日志文件，失败时打印尾部 50 行
 
-**UI 改进（12 项）**：
-6. 用户气泡 `max-width: 75%`，避免长消息横占满屏
-7. AI 消息加 🤖 头像 + "Pi" 名称标签（44px 列）
-8. ToolCard 去白底，透明背景与主区融合
-9. 思维链折叠重设计：左侧 2px 线 + 旋转 ▸ 箭头 + 字数提示
-10. composer 阴影 `shadow-lg`→`shadow-sm` + `focus-within` 主色 ring
-11. 工作目录按钮右移至 header-spacer 之后，与主题/日志按钮聚成右侧组
-12. 滚动按钮移入 `.messages` 内部，`position: absolute; bottom: var(--space-4)`
-13. 空状态加 📦 图标 + 3 个示例 prompt chip（分析 Excel / 装箱单 / 运费汇总）
-14. 会话列表相对时间（已存在，无需改）
-15. composer-pill 拆分为左右两组（左：附件/模型/权限；右：快捷 prompt）
-16. 顶栏新增 ☀️/🌙 主题切换按钮
+**Pilot 身份与教程过滤**：
+- `spawn_pi` 加 `--append-system-prompt` CLI 参数硬注入 Pilot 身份（比 APPEND_SYSTEM.md 自动加载可靠）
+- `utils.ts` 的 `isTutorialWelcome` 加中文签名（"欢迎来到 Pi"、"我是 Pi"等），移除空 userMessage 检查
+- App.tsx `agent_end` 处理器同步移除 userMessage 检查，实时流和历史会话都过滤教程欢迎语
 
-### commit `622b82f` — 侧栏 300px + 删提示行 + 工具区去白背景
+**UI 微调**：
+- 工具执行区 `.tools-detail` 改 `align-self: stretch` + `overflow-y: auto`（按钮不再被裁切）
+- Markdown 段落间距收紧（line-height 1.55，p margin 4px）
+- 会话切换加 `setSwitching(true)` + `requestAnimationFrame` 平滑过渡
+- 历史会话标题条按会话名动态显示
 
-- `--sidebar-w: 276px → 300px`
-- 删除 composer 下方的 "Enter 发送 · Shift+Enter 换行 · Esc 清空 · 物流工具在下方执行…"
-- 工具区重设计：去白色卡片背景，改用透明 + 顶部 1px 分隔线 + 表面 hover
+### 更早的迭代（见 git log）
 
-### commit `70f882b` — 聊天区滚动 + 工作目录入口 + 侧栏加宽 + 顶栏留白
-
-- `.main` 从 `overflow: visible` 改回 `overflow: hidden`（修复聊天溢出把 composer 顶出屏幕的 critical bug）
-- 顶栏新增显眼的 `📁 工作目录` 按钮（primary-soft 背景），替代设置面板里的隐藏入口
-- `--header-h: 56px → 60px`，顶栏 padding 上多下少
-- 工作目录切换：`restart_pi(cwd, null)` 重启 pi + `loadHistory()` 同步
-
-### commit `36c600f` — 文件管理区联动聊天 + 工作目录设定 + 历史会话续聊
-
-- FileBrowser 文件项加 `draggable` + `onDragStart`，拖到聊天框作为附件
-- FileBrowser 每个文件加"分析"按钮，点击加入聊天附件
-- `applyWorkdir` 实现：trim 路径 → `restart_pi` → 重置 turns → `loadHistory()`
-- 历史会话续聊：`switch_session` RPC 在 RPC 模式下不可靠，改用 `pi --session <path>` 重启 pi 进程
-- Tauri `restart_pi` Rust 命令：`cwd` + `sessionPath` 双参数，`spawn_pi`/`stop_pi_inner` 提取复用
+- `a962816` 代码审查修复 + UI 美学升级（16 项）
+- `622b82f` 侧栏 300px + 工具区去白背景
+- `70f882b` 聊天区滚动 + 工作目录入口
+- `36c600f` 文件管理区联动聊天 + 历史会话续聊
 
 ---
 
@@ -143,80 +158,98 @@ ht-logistic-workspace/
 
 ### 6.1 Pi 子进程管理
 
-- **Pi 由 Rust 主进程启动**，不由 Python sidecar 启动。避免双进程同时启动 Pi 导致会话冲突。
-- 启动方式：`pi --mode rpc`，通过 stdin/stdout JSON-RPC 通信。
-- 续聊历史会话：用 `pi --session <path>` 重启 pi 进程（不要用 `switch_session` RPC，在 RPC 模式下不可靠）。
+- **Pi 由 Rust 主进程启动**，不由 Python sidecar 启动。
+- 启动方式：`pi --mode rpc --append-system-prompt <Pilot身份>`，通过 stdin/stdout JSON-RPC 通信。
+- **Pilot 身份注入**：用 `--append-system-prompt` CLI 参数比依赖 `~/.pi/agent/APPEND_SYSTEM.md` 自动加载更可靠。
+- 续聊历史会话：用 `pi --session <path>` 重启 pi 进程（不要用 `switch_session` RPC，RPC 模式下不可靠）。
 - `restart_pi(cwd, sessionPath)` 是统一入口：切换工作目录、续聊历史会话都走它。
 - 前端通过 `listen("pi-event")` 和 `listen("pi-stderr")` 接收事件。
+- `process_gen` AtomicU64 代际号：restart 后旧进程退出不误报 `pi_process_exit`。
 
-### 6.2 布局与滚动（critical）
+### 6.2 find_pi() 优先级链（傻瓜包模式）
+
+```
+1. 打包内嵌 pi-runtime/（current_exe 向上找 6 层 + cwd 向上找）
+   → pi-runtime/pi.cmd (Windows) 或 pi-runtime/pi (macOS/Linux)
+   → 内部调用 pi-runtime/node.exe 运行 pi-runtime/node_modules/@earendil-works/pi-coding-agent
+2. 系统 PATH 查找（用户自己装了 pi）
+3. Windows npm 全局目录（APPDATA/npm, USERPROFILE/AppData/Roaming/npm）
+```
+
+### 6.3 教程欢迎语过滤
+
+Pi 首次会话会输出教程式欢迎语（中英文都有），需要过滤掉：
+- `utils.ts` 的 `isTutorialWelcome(userMessage, assistantText)` 纯按 assistantText 签名匹配
+- 签名列表：`"Welcome to Pi"`、`"interactive tutorial"`、`"agentic coding environment"`、`"欢迎来到 Pi"`、`"我是 Pi"`、`"教程之旅"`、`"你想搭个什么小工具"` 等
+- **不要加 userMessage 空检查**：Pi 会把教程作为对首条消息的回复输出
+- `rebuildTurnsFromMessages`（历史）和 `agent_end` 处理器（实时流）都要过滤
+
+### 6.4 布局与滚动（critical）
 
 - `.app` 用 CSS Grid：`grid-template-rows: var(--header-h) 1fr`。
-- `.body` 用 CSS Grid：`grid-template-columns: var(--sidebar-w) 1fr` 或三栏。
 - `.main` 必须是 `overflow: hidden` + `grid-template-rows: minmax(0, 1fr) auto auto`。
   - **绝对不能改成 `overflow: visible`**：会让 grid 行高约束失效，消息把 composer 顶出屏幕且无法滚动。
-  - 历史上为修 dropdown 裁切改过 visible，后来用 Portal 解决了裁切，visible 必须改回 hidden。
 - `.messages` 内部 `overflow-y: auto`，滚动按钮 `position: absolute` 放在 `.messages` 内部。
 
-### 6.3 下拉框：Portal + fixed
+### 6.5 下拉框：Portal + fixed
 
 - 模型/权限下拉用 `createPortal` 渲染到 `document.body`，`position: fixed`。
 - 定位：按钮 `getBoundingClientRect()` → `setDropdownPos({ left, bottom, width })`。
-- 这样彻底脱离所有父容器 `overflow` 裁切，不需要改 `.main` 的 overflow。
 
-### 6.4 工作目录（workdir）
+### 6.6 工作目录（workdir）
 
-- localStorage key: `pi-workdir`。空字符串 = 不设定（沿用 Tauri 进程 cwd）。
-- 切换工作目录会重启 pi 进程（`restart_pi(cwd, null)`），新建会话的 `--cwd` 也基于此路径。
-- "输入和输出的文件都在工作目录"自然成立，文件浏览器默认定位到这里。
-- workdir 显示在顶栏右侧按钮上，显示目录 basename（用 `replace(/[\\/]+$/, "").split(/[\\/]/).pop()` 取末段）。
+- localStorage key: `pi-workdir`。空字符串 = 不设定。
+- 切换会重启 pi 进程（`restart_pi(cwd, null)`），新建会话的 `--cwd` 也基于此路径。
+- workdir 显示在顶栏右侧按钮上，显示目录 basename。
 
-### 6.5 权限模式（三档）
+### 6.7 权限模式（三档）
 
-localStorage key: `pi-permission-mode`，值：`cautious` / `workspace` / `trust`。
-
-- `cautious`：所有 confirm 都弹窗
-- `workspace`（默认推荐）：只对"删除"等关键字弹窗，其余自动放行
-- `trust`：所有 confirm 自动放行
-
+localStorage key: `pi-permission-mode`，值：`cautious` / `workspace`（默认推荐）/ `trust`。
 Pi 事件 `extension_ui_request` 的 `method` 字段：`select` / `confirm` / `input` / `editor`。权限模式通过拦截 `confirm` 实现差异化放行。
 
-### 6.6 文件浏览器 ↔ 聊天框联动
-
-- 拖拽：FileBrowser 文件项 `draggable`，`onDragStart` 写 `text/plain` 和 `application/x-file-path`。聊天区 `onDrop` 读取路径加入附件。
-- "分析"按钮：点击调用 `onPickFile(path)`，App 层把路径加入 `attachments`，发送时拼到消息里。
-
-### 6.7 工具区 ↔ sidecar
+### 6.8 工具区 ↔ sidecar
 
 - 前端用 Tauri `readFile` 读本地文件为字节数组，包成 `File` 再 `FormData` 上传。
 - **不能用 `fetch('file://...')`**：Tauri webview 默认禁止 file:// 协议。
 - 文件型结果：弹原生保存对话框 → `invoke("write_binary_file")` 写盘。
 - JSON 型结果：直接展示，可一键"让助手解读"。
-- "让助手解读"有 10 秒去重（同一工具+同一输入+同一结果）。
 
-### 6.8 主题
+### 6.9 自动更新机制
 
-- localStorage key: `pi-theme`，值：`dark` / `light` / `system`。
-- 通过 `document.documentElement.setAttribute("data-theme", resolved)` 切换。
-- 所有颜色用 CSS 变量 + `oklch()` + `color-mix(in oklch, ...)`，无硬编码颜色。
+- **endpoint**: `https://github.com/jameszeng222/ht-logistic-workspace/releases/latest/download/latest.json`
+- **latest.json 结构**: `{ version, notes, pub_date, platforms: { "windows-x86_64": { signature, url } } }`
+- **签名**: 构建时设 `TAURI_PRIVATE_KEY` 环境变量，Tauri 自动生成 `setup.exe.sig`（minisign 格式）
+- **公钥**: 写在 `tauri.conf.json` 的 `plugins.updater.pubkey`（用户生成密钥后替换占位符）
+- **installMode**: `passive`（Windows 更新时显示小进度条窗口，无需用户交互）
+- **当前模式**: 手动检查（设置页按钮）。后续可加启动后 5 秒自动检查 + 提示。
+- **首次启用 cold-start**: 老版本（无 updater 插件）无法自动更新，需手动下载一次新版。
+
+### 6.10 打包流程关键点（Windows）
+
+- **NSIS MAX_PATH 260 限制**: pi-runtime 里 aws-sdk/mistralai 等包的 `.d.ts`/`.js` 路径超长，NSIS `makensis` 用 ANSI Win32 API 硬性失败。解决：清理非运行时文件 + 把 pi-runtime 复制到 `C:\ht-build\` 短路径再打包。
+- **resources 用 glob**: `ht-sidecar*` 适配跨平台（Linux 无 .exe 后缀），`pi-runtime/` 用目录形式保留结构。
+- **targets 只用 nsis**: WiX MSI 打包会失败，且不需要两种安装包格式。
+- **PowerShell NativeCommandError**: pyinstaller/npm 把 INFO 日志写到 stderr，PowerShell 当错误抛。用 `cmd /c "... > log.txt 2>&1"` 重定向。
 
 ---
 
 ## 7. 重要设计约束（不要违反）
 
-1. **不要把工具区做成单独页面**。助手和工具必须同屏，工具区在聊天框下面。
-2. **不要恢复会话分支/Fork UI**。用户明确说对当前工作没用。
-3. **不要让报关工具抢主界面**。保留在后端和 extension，前端工具区聚焦单据制作和数据分析。
-4. **不要让 UI 回到重分隔线风格**。新增区域优先用背景层次、留白、轻边框、hover 状态。
+1. **不要把工具区做成单独页面**。助手和工具必须同屏。
+2. **不要恢复会话分支/Fork UI**。
+3. **不要让报关工具抢主界面**。保留在后端和 extension。
+4. **不要让 UI 回到重分隔线风格**。用背景层次、留白、轻边框、hover 状态。
 5. **不要让 Python sidecar 启动 Pi**。Pi 由 Rust 主进程管理。
-6. **不要把 `.main` 改成 `overflow: visible`**。会导致聊天溢出且无法滚动（已踩过坑）。
+6. **不要把 `.main` 改成 `overflow: visible`**。会导致聊天溢出且无法滚动。
 7. **npm 命令必须在 `tauri-app/` 目录运行**。仓库根目录没有 `package.json`。
+8. **教程过滤不要加 userMessage 空检查**。Pi 会把教程作为对首条消息的回复输出。
+9. **Pilot 身份用 `--append-system-prompt` CLI 参数**，不要只靠 APPEND_SYSTEM.md 自动加载。
 
 ---
 
 ## 8. 运行方式
 
-### 首次安装
+### 首次安装（开发模式）
 
 ```powershell
 # Python sidecar 依赖
@@ -237,28 +270,53 @@ npm install
 ```powershell
 # 仓库根目录一键启动（sidecar + tauri dev）
 .\dev.ps1
-
-# 或手动分启
-cd python-sidecar
-.\..\dev.ps1   # 启动 sidecar
-
-cd ..\tauri-app
-npm run tauri dev
 ```
 
-### 构建与测试
+### 构建安装包（傻瓜包分发）
+
+**Windows**:
+```powershell
+# 1. 生成 updater 签名密钥（一次性）
+cd tauri-app
+npm run tauri signer generate -- -w $HOME/.tauri/ht-logistic.key
+# 记下输出的公钥，替换 tauri.conf.json 里的 REPLACE_WITH_YOUR_PUBKEY
+
+# 2. 设置私钥环境变量（每次构建前）
+$env:TAURI_PRIVATE_KEY = Get-Content $HOME/.tauri/ht-logistic.key -Raw
+$env:TAURI_KEY_PASSWORD = 'your-password-if-set'
+
+# 3. 一键打包
+cd ..
+.\scripts\build-installer.ps1
+```
+
+**macOS/Linux**:
+```bash
+export TAURI_PRIVATE_KEY=$(cat $HOME/.tauri/ht-logistic.key)
+bash scripts/build-installer.sh
+```
+
+构建产物（Windows）：
+```
+tauri-app\src-tauri\target\release\bundle\nsis\
+  ├─ HT Logistic Agent_0.1.0_x64-setup.exe      # 安装包
+  ├─ HT Logistic Agent_0.1.0_x64-setup.exe.sig  # updater 签名
+  └─ latest.json                                # updater manifest
+```
+
+### 发布新版本
+
+1. 改 `tauri-app/src-tauri/tauri.conf.json` 里的 `version`
+2. 跑 `build-installer.ps1`
+3. 在 GitHub 创建 Release：Tag = `v<version>`，上传脚本提示的 3 个文件
+4. 客户端设置页"检查更新"即可拉到新版
+
+### 测试
 
 ```powershell
 cd tauri-app
-npm run build      # 前端构建
 npm run test       # 前端测试
-npm run tauri build # 完整打包
-```
-
-### 部署验证
-
-```powershell
-.\deploy.ps1
+npm run build      # 前端构建验证
 ```
 
 ---
@@ -270,65 +328,72 @@ npm run tauri build # 完整打包
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/api/health
 ```
-
-失败时检查：
-- `python-sidecar/.venv` 是否创建
-- 8000 端口是否被占用
-- `python-sidecar/.sidecar.err` 错误日志
+检查 `python-sidecar/.venv` 是否创建、8000 端口是否占用、`python-sidecar/.sidecar.err` 日志。
 
 ### Pi 找不到
 
-Rust `find_pi()` 找 PATH 和 Windows npm 全局目录（`%APPDATA%\npm`、`%USERPROFILE%\AppData\Roaming\npm`）。需确认已安装 Pi CLI 且 `pi.cmd` 可执行。
+`find_pi()` 优先查打包内嵌的 `pi-runtime/`，再查 PATH 和 Windows npm 全局目录。开发模式需确认已安装 Pi CLI。
 
-### better-sqlite3 安装失败
+### 打包失败：NSIS "failed opening file"
 
-可选依赖。安装失败时 SQLite 相关工具禁用，物流工具不受影响。
+pi-runtime 里 npm 包路径超 Windows MAX_PATH 260。确认 build-installer.ps1 的 step 2d 清理逻辑生效（删除 .d.ts/.ts/.map/测试文件），且 step 2e 把 pi-runtime 复制到了 `C:\ht-build\` 短路径。
+
+### 打包失败：PyInstaller "Unable to find tools/templates"
+
+`tools/templates/` 目录不存在（用户没放 Excel 模板）。spec 文件已改为只打包存在的目录，缺失时跳过。运行时 invoice_packing.py 会报 FileNotFoundError 友好提示。
+
+### 打包失败：PowerShell NativeCommandError
+
+pyinstaller/npm 把 INFO 日志写到 stderr，PowerShell 当错误。脚本已用 `cmd /c "... > log.txt 2>&1"` 重定向，失败时打印日志末尾 50 行。
+
+### 更新检查失败
+
+- 确认 `tauri.conf.json` 的 `pubkey` 已替换为真实公钥（不是占位符）
+- 确认 GitHub Release 已上传 `latest.json` + `setup.exe.sig` + `setup.exe`
+- 确认 Release 的 tag 版本号与 `latest.json` 里的 `version` 一致
+- 确认 `TAURI_PRIVATE_KEY` 构建时已设置（否则 .sig 为空）
 
 ### 聊天区无法滚动 / composer 被顶出屏幕
 
 检查 `.main` 是否 `overflow: hidden`。若被改成 `visible`，改回来。
 
-### 工作目录切换后界面空白
-
-`applyWorkdir` 必须在 `restart_pi` 后调用 `await loadHistory()`。已修复，但若有人改这个函数要注意。
-
 ### 历史会话无法续聊
 
-不要用 `switch_session` RPC（RPC 模式下不可靠）。用 `restart_pi(cwd, sessionPath)` 重启 pi 进程。
+不要用 `switch_session` RPC。用 `restart_pi(cwd, sessionPath)` 重启 pi 进程。
+
+### Pi 自称是"Pi 编程助手" / 输出教程欢迎语
+
+- 确认 `--append-system-prompt` 参数传了 Pilot 身份提示词
+- 确认 `isTutorialWelcome` 签名列表覆盖了 Pi 输出的教程文本
+- 确认 `agent_end` 处理器和 `rebuildTurnsFromMessages` 都调用了过滤
 
 ---
 
 ## 10. 后续建议（按优先级）
 
-### P0：让工具更像真正物流工作流
+### P0：完善自动更新
+- 加启动后 5 秒自动检查（只提示，不自动安装）
+- latest.json 的 notes 字段从 git commit log 或 CHANGELOG.md 读取，而非硬编码
+- 考虑增量更新 pi-runtime（当前每次更新重下 80MB+ 整包）
 
-- `invoice-packing` 增加字段校验报告：缺失万邑通单号 / SKU / 品名 / 数量 / 单价、单号重复、渠道识别失败
+### P0：让工具更像真正物流工作流
+- `invoice-packing` 增加字段校验报告：缺失万邑通单号 / SKU / 品名 / 数量 / 单价
 - 输出前展示预检结果，用户确认后再生成
-- 执行结果返回结构化摘要，让助手能说明生成了哪些单、哪些失败、为什么
+- 执行结果返回结构化摘要，让助手能说明生成了哪些单、哪些失败
 
 ### P0：增强数据分析
-
-- `data-analysis` 输出目前是 JSON，下一步前端直接渲染图表
-- 优先图表：数值列直方图、分类 Top N 条形图、时间列趋势图、相关性热力图
+- 前端直接渲染图表（数值列直方图、分类 Top N、时间趋势、相关性热力图）
 - 让助手读取分析 JSON 生成业务建议
 
 ### P1：文件侧栏和聊天联动增强
-
 - 文件右键：用当前选中文件执行工具
 - 聊天框引用当前选中文件路径
-- 工具执行结果自动出现在文件侧栏/最近结果列表
+- 工具执行结果自动出现在文件侧栏
 
 ### P1：会话体验
-
-- 项目工作区切换（不只靠历史会话 cwd）
+- 项目工作区切换
 - 左侧显示「当前项目」下最近会话
 - 新建会话继承当前项目目录
-
-### P2：打包与安装
-
-- 完善 PyInstaller sidecar 打包流程
-- Tauri 打包时把 `python-sidecar/ht-sidecar.exe` 放进 resources
-- 首次运行检测 Python sidecar 是否就绪并给出修复按钮
 
 ---
 
@@ -337,7 +402,7 @@ Rust `find_pi()` 找 PATH 和 Windows npm 全局目录（`%APPDATA%\npm`、`%USE
 可以直接把下面这段给 Codex：
 
 ```text
-你在维护 HT Logistic Workspace。它是 Tauri v2 + React + Python FastAPI sidecar + Pi extension 的本地物流 AI 工作台。
+你在维护 HT Logistic Workspace。它是 Tauri v2 + React + Python FastAPI sidecar + Pi extension 的本地物流 AI 工作台，已支持傻瓜包分发（内嵌 Python sidecar + 便携 Node.js + pi 包）和手动检查更新（Tauri updater + GitHub Release）。
 
 产品方向：
 - 助手、物流工具区、文件侧栏必须同屏。
@@ -349,18 +414,27 @@ Rust `find_pi()` 找 PATH 和 Windows npm 全局目录（`%APPDATA%\npm`、`%USE
 - .main 必须 overflow: hidden，否则聊天溢出且无法滚动。
 - 下拉框用 createPortal + position: fixed，不要靠改父容器 overflow。
 - Pi 由 Rust 主进程管理，不由 Python sidecar 启动。
+- Pi 启动必须带 --append-system-prompt 参数注入 Pilot 身份。
 - 续聊历史会话用 restart_pi(cwd, sessionPath)，不要用 switch_session RPC。
 - 工作目录切换后必须 await loadHistory() 同步界面。
 - npm 命令必须在 tauri-app/ 目录运行。
+- 教程过滤（isTutorialWelcome）不要加 userMessage 空检查。
+- 打包时 pi-runtime 必须复制到 C:\ht-build\ 短路径，否则 NSIS MAX_PATH 失败。
 
 关键文件：
-- tauri-app/src/App.tsx：主界面（1891 行）
-- tauri-app/src/styles.css：双主题 + 布局 + 组件（2428 行）
-- tauri-app/src/FileBrowser.tsx：文件浏览器（396 行）
-- tauri-app/src/ToolsPanel.tsx：物流工具区（355 行）
-- tauri-app/src-tauri/src/main.rs：Pi RPC + sidecar + 文件命令（1382 行）
+- tauri-app/src/App.tsx：主界面（含设置页"关于与更新"区块）
+- tauri-app/src/updater.ts：自动更新封装（checkUpdate / downloadAndInstallUpdate）
+- tauri-app/src/utils.ts：isTutorialWelcome 教程过滤
+- tauri-app/src/styles.css：双主题 + 布局 + 组件
+- tauri-app/src/FileBrowser.tsx：文件浏览器
+- tauri-app/src/ToolsPanel.tsx：物流工具区
+- tauri-app/src-tauri/src/main.rs：Pi RPC + sidecar + 文件命令 + find_pi（pi-runtime 优先）
+- tauri-app/src-tauri/tauri.conf.json：含 plugins.updater + bundle.resources + createUpdaterArtifacts
+- tauri-app/src-tauri/capabilities/default.json：含 updater:default + process:default 权限
 - python-sidecar/main.py 和 python-sidecar/tools/：物流工具 API
+- python-sidecar/ht-sidecar.spec：PyInstaller 配置（datas 只打包存在的目录）
 - pi-extensions/all-in-one.ts：AI agent 可调用工具
+- scripts/build-installer.ps1：Windows 一键打包（含 latest.json 生成）
 
 修改时请保持：
 - Python sidecar 只做工具 API，不启动 Pi。
@@ -368,6 +442,8 @@ Rust `find_pi()` 找 PATH 和 Windows npm 全局目录（`%APPDATA%\npm`、`%USE
 - 前端工具区默认只展示 invoice-packing 和 data-analysis。
 - 构建验证至少运行：cd tauri-app && npm run build。
 - 修改 .main 的 overflow 前必须确认不会破坏聊天滚动。
+- 改 tauri.conf.json 的 resources 后要确认跨平台 glob 不会因路径不存在失败。
+- 改 updater 配置后要确认 pubkey 已替换为真实公钥（不是占位符）。
 ```
 
 ---
@@ -375,8 +451,8 @@ Rust `find_pi()` 找 PATH 和 Windows npm 全局目录（`%APPDATA%\npm`、`%USE
 ## 12. 当前仓库状态
 
 - 主分支：`main`
-- 最新 commit：`a962816 feat: 代码审查修复+UI美学升级（16项）`
-- 工作树：clean，已推送到 `origin/main`
-- 总代码量：约 6452 行（App.tsx + styles.css + FileBrowser + ToolsPanel + main.rs）
+- 远程：`https://github.com/jameszeng222/ht-logistic-workspace.git`
+- 近期工作：自动更新集成 + 打包流程修复 + Pilot 身份注入 + 教程过滤
+- 总代码量：约 7000 行（App.tsx + styles.css + FileBrowser + ToolsPanel + main.rs + updater.ts）
 
-后续最值得投入的方向：把「工具执行结果」变成结构化业务反馈，再让 AI 能基于这些反馈给出可执行建议。
+后续最值得投入的方向：完善自动更新（启动时检查 + 增量更新）、把「工具执行结果」变成结构化业务反馈、让 AI 能基于这些反馈给出可执行建议。

@@ -11,6 +11,7 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getVersion } from "@tauri-apps/api/app";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { PiEvent } from "./pi-client";
 import { Markdown } from "./Markdown";
@@ -20,6 +21,7 @@ import { rebuildTurnsFromMessages, isTutorialWelcome } from "./utils";
 import { ChartView, extractChartConfig } from "./Chart";
 import { ToolsPanel, type ToolsPanelHandle, type ToolDef } from "./ToolsPanel";
 import { FileBrowser } from "./FileBrowser";
+import { checkUpdate, downloadAndInstallUpdate, type UpdateStatus } from "./updater";
 import type { ToolCall, AssistantMsg, Turn } from "./types";
 import pilotAvatar from "./assets/pilot-avatar.png";
 import "./styles.css";
@@ -116,6 +118,8 @@ export default function App() {
 
   // 设置面板
   const [showSettings, setShowSettings] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ kind: "idle" });
+  const [appVersion, setAppVersion] = useState<string>("");
   const [autoCompaction, setAutoCompaction] = useState(true);
   const [autoRetry, setAutoRetry] = useState(true);
   const [envKeys, setEnvKeys] = useState<{provider: string; env: string; configured: boolean}[]>([]);
@@ -658,6 +662,10 @@ export default function App() {
   const refreshSessionsRef = useRef(refreshSessions); refreshSessionsRef.current = refreshSessions;
   const refreshEnvKeysRef = useRef(refreshEnvKeys); refreshEnvKeysRef.current = refreshEnvKeys;
   const loadHistoryRef = useRef(loadHistory); loadHistoryRef.current = loadHistory;
+  // 读取当前 app 版本号（供设置页"关于与更新"显示）
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => setAppVersion("unknown"));
+  }, []);
   useEffect(() => {
     let cancelled = false;
     let unlisten: UnlistenFn | undefined;
@@ -816,6 +824,43 @@ export default function App() {
   }, [rpc, refreshState, toast]);
 
   // ====== 设置操作 ======
+
+  // —— 自动更新：手动检查 + 下载安装 ——
+  const doCheckUpdate = useCallback(async () => {
+    setUpdateStatus({ kind: "checking" });
+    try {
+      const update = await checkUpdate();
+      if (update?.available) {
+        setUpdateStatus({
+          kind: "available",
+          currentVersion: update.currentVersion,
+          version: update.version,
+          notes: update.body || "(无更新说明)",
+        });
+      } else {
+        setUpdateStatus({
+          kind: "up-to-date",
+          currentVersion: update?.currentVersion ?? appVersion,
+        });
+      }
+    } catch (e) {
+      setUpdateStatus({ kind: "error", message: String(e) });
+    }
+  }, [appVersion]);
+
+  const doDownloadAndInstall = useCallback(async () => {
+    setUpdateStatus({ kind: "downloading", percent: 0 });
+    try {
+      await downloadAndInstallUpdate((percent) => {
+        setUpdateStatus({ kind: "downloading", percent });
+      });
+      setUpdateStatus({ kind: "done" });
+      // relaunch 由 downloadAndInstallUpdate 内部调用，到这里说明重启未生效或失败
+    } catch (e) {
+      setUpdateStatus({ kind: "error", message: String(e) });
+    }
+  }, []);
+
   const setThinking = useCallback(async (level: string) => {
     try {
       await rpc({ type: "set_thinking_level", level });
@@ -1985,6 +2030,85 @@ export default function App() {
                 <div className="setting-desc">
                   保存后<strong>新建会话</strong>即生效；当前会话不会热重载。
                   {systemPromptDirty && <span style={{ color: "var(--warning)" }}> · 有未保存改动</span>}
+                </div>
+              </div>
+            </div>
+
+            {/* 关于与更新（手动检查模式，后续再加启动时自动检查）*/}
+            <div className="settings-section">
+              <div className="settings-section-title">关于与更新</div>
+              <div className="setting-row" style={{ alignItems: "flex-start", flexDirection: "column", gap: "var(--space-2)" }}>
+                <div>
+                  <div className="setting-label">当前版本</div>
+                  <div className="setting-desc">v{appVersion || "—"}</div>
+                </div>
+
+                {updateStatus.kind === "idle" && (
+                  <button className="btn-secondary" onClick={doCheckUpdate}>检查更新</button>
+                )}
+
+                {updateStatus.kind === "checking" && (
+                  <button className="btn-secondary" disabled>检查中…</button>
+                )}
+
+                {updateStatus.kind === "up-to-date" && (
+                  <div className="setting-desc" style={{ color: "var(--success, #16a34a)" }}>
+                    ✓ 已是最新版本 (v{updateStatus.currentVersion})
+                    <div style={{ marginTop: 6 }}>
+                      <button className="btn-secondary" onClick={doCheckUpdate}>再次检查</button>
+                    </div>
+                  </div>
+                )}
+
+                {updateStatus.kind === "available" && (
+                  <div style={{ width: "100%" }}>
+                    <div className="setting-label" style={{ color: "var(--success, #16a34a)" }}>
+                      发现新版本：v{updateStatus.version}
+                    </div>
+                    <div className="setting-desc" style={{ marginTop: 4, whiteSpace: "pre-wrap", maxHeight: 120, overflow: "auto" }}>
+                      {updateStatus.notes}
+                    </div>
+                    <div style={{ display: "flex", gap: "var(--space-2)", marginTop: 8 }}>
+                      <button className="btn-primary" onClick={doDownloadAndInstall}>下载并安装</button>
+                      <button className="btn-secondary" onClick={doCheckUpdate}>重新检查</button>
+                    </div>
+                  </div>
+                )}
+
+                {updateStatus.kind === "downloading" && (
+                  <div style={{ width: "100%" }}>
+                    <div className="setting-label">正在下载… {updateStatus.percent}%</div>
+                    <div style={{
+                      width: "100%", height: 6, background: "var(--bg-hover, #e5e7eb)",
+                      borderRadius: 3, marginTop: 6, overflow: "hidden"
+                    }}>
+                      <div style={{
+                        width: `${updateStatus.percent}%`, height: "100%",
+                        background: "var(--accent, #2563eb)", transition: "width 0.2s"
+                      }} />
+                    </div>
+                  </div>
+                )}
+
+                {updateStatus.kind === "done" && (
+                  <div className="setting-desc" style={{ color: "var(--success, #16a34a)" }}>
+                    ✓ 下载完成，即将重启…
+                  </div>
+                )}
+
+                {updateStatus.kind === "error" && (
+                  <div>
+                    <div className="setting-desc" style={{ color: "var(--error, #dc2626)" }}>
+                      ✗ 检查更新失败：{updateStatus.message}
+                    </div>
+                    <div style={{ marginTop: 6 }}>
+                      <button className="btn-secondary" onClick={doCheckUpdate}>重试</button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="setting-desc" style={{ color: "var(--fg-subtle)", marginTop: 4 }}>
+                  更新源：GitHub Release。仅手动检查，不会自动下载或安装。
                 </div>
               </div>
             </div>

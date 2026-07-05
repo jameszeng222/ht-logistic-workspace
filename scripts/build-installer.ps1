@@ -208,6 +208,33 @@ foreach ($d in $cleanupDirs) {
 Get-ChildItem $sidecarDir -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
     ForEach-Object { Remove-Item $_.FullName -Recurse -Force }
 
+# ---------- 3. Clean sidecar temp + build Tauri installer ----------
+Write-Host ""
+Write-Host "[3/4] Cleaning + building Tauri installer..." -ForegroundColor Yellow
+
+# 3a. Verify updater signing key is configured (required to generate .sig artifacts)
+if (-not $env:TAURI_PRIVATE_KEY) {
+    Write-Host ""
+    Write-Host "WARNING: TAURI_PRIVATE_KEY environment variable not set." -ForegroundColor Red
+    Write-Host "  Without the signing key, the updater .sig file won't be generated," -ForegroundColor Yellow
+    Write-Host "  and auto-update will fail signature verification." -ForegroundColor Yellow
+    Write-Host "  Generate a key pair with:" -ForegroundColor Yellow
+    Write-Host "    npm run tauri signer generate -- -w `$HOME/.tauri/ht-logistic.key" -ForegroundColor Gray
+    Write-Host "  Then set before running this script:" -ForegroundColor Yellow
+    Write-Host "    `$env:TAURI_PRIVATE_KEY = Get-Content `$HOME/.tauri/ht-logistic.key -Raw" -ForegroundColor Gray
+    Write-Host "    `$env:TAURI_KEY_PASSWORD = 'your-password-if-set'" -ForegroundColor Gray
+    Write-Host "  Continuing build WITHOUT updater signature (auto-update disabled)..." -ForegroundColor Yellow
+    Write-Host ""
+}
+
+$cleanupDirs = @("build", "dist", "__pycache__", ".pytest_cache")
+foreach ($d in $cleanupDirs) {
+    $p = Join-Path $sidecarDir $d
+    if (Test-Path $p) { Remove-Item $p -Recurse -Force }
+}
+Get-ChildItem $sidecarDir -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
+    ForEach-Object { Remove-Item $_.FullName -Recurse -Force }
+
 Push-Location $tauriDir
 try {
     npm install --silent
@@ -223,17 +250,85 @@ if (Test-Path $shortBuildRoot) {
     Remove-Item $shortBuildRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# ---------- 4. Print output paths ----------
+# ---------- 4. Generate latest.json + print upload checklist ----------
 Write-Host ""
-Write-Host "[4/4] Build complete!" -ForegroundColor Green
-$bundleDir = Join-Path $tauriDir "src-tauri\target\release\bundle"
+Write-Host "[4/4] Build complete! Generating updater manifest..." -ForegroundColor Green
+$bundleDir = Join-Path $tauriDir "src-tauri\target\release\bundle\nsis"
+
+# Locate the NSIS setup .exe (filename includes version + arch, e.g. "HT Logistic Agent_0.1.0_x64-setup.exe")
+$setupExe = Get-ChildItem (Join-Path $bundleDir "*-setup.exe") -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $setupExe) {
+    throw "NSIS setup .exe not found in $bundleDir"
+}
+$setupSig = "$($setupExe.FullName).sig"
+
+# Read app version from tauri.conf.json
+$tauriConfPath = Join-Path $tauriDir "src-tauri\tauri.conf.json"
+$tauriConf = Get-Content $tauriConfPath -Raw | ConvertFrom-Json
+$appVersion = $tauriConf.version
+
+# GitHub Release asset URL pattern: releases/latest/download/<filename>
+# The tag is set by the user when creating the release; the "latest" alias resolves to the most recent.
+$repoOwner = "jameszeng222"
+$repoName = "ht-logistic-workspace"
+$setupUrl = "https://github.com/$repoOwner/$repoName/releases/latest/download/$($setupExe.Name)"
+
+# Read signature content (single-line base64 + header)
+$signature = ""
+if (Test-Path $setupSig) {
+    $signature = (Get-Content $setupSig -Raw).Trim()
+} else {
+    Write-Host "  WARNING: .sig file not found at $setupSig" -ForegroundColor Yellow
+    Write-Host "  Auto-update will not work. Did you set TAURI_PRIVATE_KEY?" -ForegroundColor Yellow
+}
+
+# Build the updater manifest consumed by the client's check() call.
+# Field names are dictated by the Tauri updater protocol:
+#   version:  new version string
+#   notes:    release notes (shown in the UI)
+#   pub_date: ISO 8601 timestamp
+#   platforms: per-target signature + download URL
+#   "windows-x86_64" is the target key Tauri uses on x64 Windows.
+$releaseNotes = "HT Logistic Agent v$appVersion. See GitHub Release for details."
+$latestJson = @{
+    version = $appVersion
+    notes = $releaseNotes
+    pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    platforms = @{
+        "windows-x86_64" = @{
+            signature = $signature
+            url = $setupUrl
+        }
+    }
+} | ConvertTo-Json -Depth 5
+
+$latestJsonPath = Join-Path $bundleDir "latest.json"
+Set-Content -Path $latestJsonPath -Value $latestJson -Encoding UTF8
+
 Write-Host ""
-Write-Host "Output:" -ForegroundColor Cyan
-if (Test-Path (Join-Path $bundleDir "nsis")) {
-    Get-ChildItem (Join-Path $bundleDir "nsis\*.exe") | ForEach-Object {
-        $size = [math]::Round($_.Length / 1MB, 1)
-        Write-Host "  NSIS installer: $($_.FullName) (${size} MB)" -ForegroundColor White
+Write-Host "================================================" -ForegroundColor Cyan
+Write-Host "  Build artifacts ready" -ForegroundColor Cyan
+Write-Host "================================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Upload these 3 files to a new GitHub Release:" -ForegroundColor Yellow
+Write-Host ""
+$filesToUpload = @($setupExe.FullName, $setupSig, $latestJsonPath)
+foreach ($f in $filesToUpload) {
+    if (Test-Path $f) {
+        $size = [math]::Round((Get-Item $f).Length / 1MB, 1)
+        Write-Host "  $f  (${size} MB)" -ForegroundColor White
+    } else {
+        Write-Host "  $f  (MISSING!)" -ForegroundColor Red
     }
 }
 Write-Host ""
-Write-Host "Users just double-click the .exe to install. No Node.js/Python/Rust needed." -ForegroundColor Cyan
+Write-Host "Release steps:" -ForegroundColor Cyan
+Write-Host "  1. Tag: v$appVersion  (must match version in tauri.conf.json)" -ForegroundColor Gray
+Write-Host "  2. Title: HT Logistic Agent v$appVersion" -ForegroundColor Gray
+Write-Host "  3. Attach the 3 files above" -ForegroundColor Gray
+Write-Host "  4. Publish release" -ForegroundColor Gray
+Write-Host ""
+Write-Host "Client endpoint (already configured in tauri.conf.json):" -ForegroundColor Cyan
+Write-Host "  https://github.com/$repoOwner/$repoName/releases/latest/download/latest.json" -ForegroundColor Gray
+Write-Host ""
+Write-Host "Users: just double-click the .exe to install. No Node.js/Python/Rust needed." -ForegroundColor Green
