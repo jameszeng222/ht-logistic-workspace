@@ -68,6 +68,11 @@ function isExcelFile(name: string): boolean {
   return ext === "xlsx" || ext === "xls";
 }
 
+function isPdfFile(name: string): boolean {
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  return ext === "pdf";
+}
+
 function formatSize(bytes: number): string {
   if (bytes === 0) return "";
   if (bytes < 1024) return `${bytes} B`;
@@ -110,7 +115,7 @@ interface FileBrowserProps {
   /** 点击"分析"按钮时回调，把文件绝对路径交给聊天框作为附件 */
   onPickFile?: (path: string) => void;
   /** 点击"单据"/"数据"按钮时回调，把文件交给工具区执行对应工具 */
-  onRunTool?: (path: string, toolKind: "invoice" | "data") => void;
+  onRunTool?: (path: string, toolKind: "invoice" | "customs" | "customs-extract" | "data") => void;
   /** 最近使用文件（localStorage 持久化），上下文区显示 */
   recentFiles?: string[];
   /** 工具输出文件（最近 3 个），上下文区显示 */
@@ -314,7 +319,11 @@ export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool
       }
       if (onRunTool && isExcelFile(entry.name)) {
         items.push({ label: "单据制作", onClick: () => onRunTool(entry.path, "invoice") });
+        items.push({ label: "报关单生成", onClick: () => onRunTool(entry.path, "customs") });
         items.push({ label: "数据分析", onClick: () => onRunTool(entry.path, "data") });
+      }
+      if (onRunTool && isPdfFile(entry.name)) {
+        items.push({ label: "报关单提取", onClick: () => onRunTool(entry.path, "customs-extract") });
       }
     }
     return items;
@@ -327,7 +336,11 @@ export function FileBrowser({ currentCwd, compact = false, onPickFile, onRunTool
     if (onPickFile) items.push({ label: "加入聊天分析", onClick: () => onPickFile(path) });
     if (onRunTool && isExcelFile(name)) {
       items.push({ label: "单据制作", onClick: () => onRunTool(path, "invoice") });
+      items.push({ label: "报关单生成", onClick: () => onRunTool(path, "customs") });
       items.push({ label: "数据分析", onClick: () => onRunTool(path, "data") });
+    }
+    if (onRunTool && isPdfFile(name)) {
+      items.push({ label: "报关单提取", onClick: () => onRunTool(path, "customs-extract") });
     }
     return items;
   }, [onPickFile, onRunTool]);

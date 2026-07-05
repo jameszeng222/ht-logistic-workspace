@@ -51,7 +51,7 @@ interface ToolsPanelProps {
  */
 export interface ToolsPanelHandle {
   /** 加载文件到工具区，按 toolKind 切换工具并填入 filePath */
-  loadFile: (path: string, toolKind: "invoice" | "data") => void;
+  loadFile: (path: string, toolKind: "invoice" | "customs" | "customs-extract" | "data") => void;
   /** 按 id 切换当前工具（供左侧栏导航点击调用），清空文件与结果 */
   selectTool: (id: string) => void;
 }
@@ -165,11 +165,17 @@ export const ToolsPanel = forwardRef<ToolsPanelHandle, ToolsPanelProps>(function
   // selectTool(id)：按 id 切换 activeTool（供左侧栏导航点击调用），清空文件与结果
   // 每次调用都是独立命令，直接操作 state，无 useEffect 副作用链。
   useImperativeHandle(ref, () => ({
-    loadFile: (path: string, toolKind: "invoice" | "data") => {
+    loadFile: (path: string, toolKind: "invoice" | "customs" | "customs-extract" | "data") => {
       const p = path.trim();
       if (!p) return;
       // 按 toolKind 找对应工具
-      const targetId = toolKind === "invoice" ? "invoice-packing" : "data-analysis";
+      const targetId = toolKind === "invoice"
+        ? "invoice-packing"
+        : toolKind === "customs"
+        ? "customs-generator"
+        : toolKind === "customs-extract"
+        ? "customs-extractor"
+        : "data-analysis";
       const matched = tools.find((t) => t.id === targetId) || null;
       if (matched) {
         setActiveTool(matched);

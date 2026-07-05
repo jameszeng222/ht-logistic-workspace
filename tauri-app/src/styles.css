@@ -150,7 +150,7 @@
   /* 布局 */
   --header-h: 60px;
   --sidebar-w: 300px;
-  --files-w: 326px;
+  --files-w: 300px;
   --content-max: 900px;
 }
 
@@ -197,7 +197,7 @@ body {
   align-items: center;
   gap: var(--space-2);
   /* 顶栏上方留白多一点（用户多次要求），下方略少保持紧凑 */
-  padding: var(--space-4) var(--space-3) var(--space-2) var(--space-1);
+  padding: calc(var(--space-4) - 2px) var(--space-3) var(--space-2) var(--space-1);
   background: var(--bg);
   border-bottom: 0;
   -webkit-app-region: drag;
@@ -229,7 +229,7 @@ body {
   align-items: center;
   gap: var(--space-2);
   font-weight: 600;
-  font-size: var(--text-base);
+  font-size: var(--text-lg);
   letter-spacing: -0.01em;
 }
 .app-brand-mark {

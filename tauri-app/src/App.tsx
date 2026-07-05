@@ -920,13 +920,17 @@ export default function App() {
   // 工具导航镜像状态：ToolsPanel 上报 tools/activeTool，供左侧栏渲染导航
   const [toolsList, setToolsList] = useState<ToolDef[]>([]);
   const [activeToolMirrored, setActiveToolMirrored] = useState<ToolDef | null>(null);
-  const runToolFromBrowser = useCallback((path: string, toolKind: "invoice" | "data") => {
+  const runToolFromBrowser = useCallback((path: string, toolKind: "invoice" | "customs" | "customs-extract" | "data") => {
     const trimmed = path.trim();
     if (!trimmed) return;
     const fileName = trimmed.split(/[\\/]/).pop() || trimmed;
     toolsPanelRef.current?.loadFile(trimmed, toolKind);
     addRecentFile(trimmed);
-    toast(`已加载到工具区：${fileName}（${toolKind === "invoice" ? "单据制作" : "数据分析"}）`, "success");
+    const label = toolKind === "invoice" ? "单据制作"
+      : toolKind === "customs" ? "报关单生成"
+      : toolKind === "customs-extract" ? "报关单提取"
+      : "数据分析";
+    toast(`已加载到工具区：${fileName}（${label}）`, "success");
   }, [toast, addRecentFile]);
 
   // ====== 工作目录设定 ======
@@ -1204,7 +1208,7 @@ export default function App() {
           {/* 会话列表：flex:1 撑满上半部分，把"物流工具"推到中间偏下位置 */}
           <div className="sidebar-section" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
             <div className="sidebar-section-header">
-              <span className="sidebar-title">历史会话</span>
+              <span className="sidebar-title">会话管理</span>
               <button className="sidebar-new-btn" onClick={newSession} disabled={busy}>+ 新建</button>
             </div>
             {/* 搜索框 */}
@@ -1247,7 +1251,6 @@ export default function App() {
                           className={`session-item ${isActive ? "active" : ""} ${isPreviewing ? "previewing" : ""}`}
                           onClick={() => !isRenaming && switchSession(s.path)}
                         >
-                          <span className="session-icon">💬</span>
                           <div className="session-info">
                             {isRenaming ? (
                               <input
@@ -1318,8 +1321,12 @@ export default function App() {
           <div className="sidebar-footer-bar">
             <div className="sidebar-footer-row1" title={`模型：${currentModel?.name ?? "未连接"}`}>
               <span className={`sidebar-footer-dot ${ready ? (busy ? "busy" : "ready") : "error"}`} />
-              <span className="sidebar-footer-state">{ready ? (busy ? "思考中" : "空闲") : "未连接"}</span>
-              <span className="sidebar-footer-sep">·</span>
+              {(!ready || busy) && (
+                <>
+                  <span className="sidebar-footer-state">{ready ? "思考中" : "未连接"}</span>
+                  <span className="sidebar-footer-sep">·</span>
+                </>
+              )}
               <span className="sidebar-footer-model">{currentModel?.name ?? "—"}</span>
             </div>
             <div className="sidebar-footer-row2" title={permissionModeLabel}>
