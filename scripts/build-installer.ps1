@@ -111,9 +111,9 @@ if (Test-Path $piRuntimeDir) {
 New-Item -ItemType Directory -Path $piRuntimeDir -Force | Out-Null
 
 # 2a. Download portable Node.js (x64)
-#     用 .NET WebClient + 断点续传 + 3 次重试，替代 Invoke-WebRequest。
-#     国内网络下 IWR 经常中途断流（"从传输流收到意外的 EOF"），WebClient
-#     支持超时显式设置和断点续传，更稳。
+#     用 curl.exe（Windows 10+ 自带）下载，支持断点续传 + 自动重试，
+#     比 Invoke-WebRequest 稳得多（IWR 在国内网络常中途断流 EOF）。
+#     -L 跟随重定向，--retry 自动重试，-C - 断点续传，--connect-timeout 连接超时
 $nodeVersion = "v22.20.0"
 $nodeArch = "x64"
 $nodeUrl = "https://nodejs.org/dist/$nodeVersion/node-$nodeVersion-win-$nodeArch.zip"
@@ -123,72 +123,34 @@ $nodeExtractDir = Join-Path $env:TEMP "node-portable-extract"
 Write-Host "  Downloading Node.js $nodeVersion (win-$nodeArch)..." -ForegroundColor Gray
 if (Test-Path $nodeExtractDir) { Remove-Item $nodeExtractDir -Recurse -Force }
 
-# 下载函数：带断点续传 + 重试。成功返回 $true。
-function Download-File-With-Retry {
-    param([string]$Url, [string]$OutFile, [int]$MaxRetries = 3)
-    for ($i = 1; $i -le $MaxRetries; $i++) {
+# 优先用 curl.exe（最稳），fallback 到 Invoke-WebRequest
+$curlExe = Get-Command curl.exe -ErrorAction SilentlyContinue
+if ($curlExe) {
+    Write-Host "    using curl.exe with retry + resume..." -ForegroundColor Gray
+    & curl.exe -L --retry 5 --retry-delay 3 --retry-connrefused `
+        --connect-timeout 30 --max-time 600 `
+        -C - -o "$nodeZip" "$nodeUrl"
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $nodeZip)) {
+        throw "curl 下载失败（exit $LASTEXITCODE）。请手动下载 $nodeUrl 到 $nodeZip"
+    }
+} else {
+    Write-Host "    curl.exe not found, falling back to Invoke-WebRequest..." -ForegroundColor Gray
+    $downloaded = $false
+    for ($i = 1; $i -le 3; $i++) {
         try {
-            # 断点续传：若已有部分文件，从已下载字节数继续
-            $startByte = 0
-            if (Test-Path $OutFile) {
-                $existingLen = (Get-Item $OutFile).Length
-                # 只在文件小于远程大小时续传（避免完整文件重复下）
-                try {
-                    $resp = Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -TimeoutSec 15
-                    $remoteLen = [int64]$resp.Headers["Content-Length"]
-                    if ($existingLen -ge $remoteLen -and $remoteLen -gt 0) {
-                        Write-Host "    已下载完整文件，跳过" -ForegroundColor Gray
-                        return $true
-                    }
-                    $startByte = $existingLen
-                } catch {
-                    # Head 请求失败就删了重下
-                    Remove-Item $OutFile -Force -ErrorAction SilentlyContinue
-                    $startByte = 0
-                }
-            }
-            if ($startByte -eq 0) {
-                Remove-Item $OutFile -Force -ErrorAction SilentlyContinue
-            } else {
-                Write-Host "    断点续传从 $startByte 字节继续..." -ForegroundColor Gray
-            }
-
-            $client = New-Object System.Net.WebClient
-            $client.Headers.Add("User-Agent", "PowerShell-build-installer")
-            if ($startByte -gt 0) {
-                $client.Headers.Add("Range", "bytes=$startByte-")
-            }
-            # 总超时 10 分钟（大文件慢网兜底）
-            $client.DownloadFile($Url, $OutFile + ".part")
-            if ($startByte -gt 0 -and (Test-Path $OutFile)) {
-                # 续传时 .part 是剩余部分，拼接到原文件后面
-                $origBytes = [System.IO.File]::ReadAllBytes($OutFile)
-                $partBytes = [System.IO.File]::ReadAllBytes($OutFile + ".part")
-                $combined = New-Object byte[] ($origBytes.Length + $partBytes.Length)
-                [Array]::Copy($origBytes, 0, $combined, 0, $origBytes.Length)
-                [Array]::Copy($partBytes, 0, $combined, $origBytes.Length, $partBytes.Length)
-                [System.IO.File]::WriteAllBytes($OutFile, $combined)
-                Remove-Item $OutFile".part" -Force
-            } else {
-                Move-Item $OutFile".part" $OutFile -Force
-            }
-            Write-Host "    下载完成（尝试 $i）" -ForegroundColor Gray
-            return $true
+            Invoke-WebRequest -Uri $nodeUrl -OutFile $nodeZip -UseBasicParsing -TimeoutSec 600
+            $downloaded = $true
+            break
         } catch {
-            Write-Host "    下载失败（尝试 $i/$MaxRetries）：$($_.Exception.Message)" -ForegroundColor Yellow
-            if ($i -lt $MaxRetries) {
-                Write-Host "    等待 3 秒后重试..." -ForegroundColor Gray
-                Start-Sleep -Seconds 3
-            }
+            Write-Host "    IWR 失败（尝试 $i/3）：$($_.Exception.Message)" -ForegroundColor Yellow
+            if ($i -lt 3) { Start-Sleep -Seconds 3 }
         }
     }
-    return $false
+    if (-not $downloaded) {
+        throw "Node.js 下载失败（IWR 重试 3 次）。请手动下载 $nodeUrl 到 $nodeZip"
+    }
 }
-
-$dlOk = Download-File-With-Retry -Url $nodeUrl -OutFile $nodeZip -MaxRetries 3
-if (-not $dlOk) {
-    throw "Node.js 下载失败（已重试 3 次）。请检查网络或手动下载 $nodeUrl 到 $nodeZip"
-}
+Write-Host "    download complete" -ForegroundColor Gray
 
 Expand-Archive -Path $nodeZip -DestinationPath $nodeExtractDir -Force
 $nodeDir = Get-ChildItem -Path $nodeExtractDir -Directory | Select-Object -First 1
