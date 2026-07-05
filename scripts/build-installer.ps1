@@ -19,6 +19,51 @@ $sidecarDir = Join-Path $repoRoot "python-sidecar"
 $tauriDir = Join-Path $repoRoot "tauri-app"
 $piRuntimeDir = Join-Path $repoRoot "pi-runtime"
 
+function Write-PiLauncher {
+    param([Parameter(Mandatory = $true)][string]$RuntimeDir)
+
+    $piCliJs = "node_modules\@earendil-works\pi-coding-agent\dist\cli.js"
+    $piCliPath = Join-Path $RuntimeDir $piCliJs
+    if (-not (Test-Path $piCliPath)) {
+        throw "Pi CLI entry not found: $piCliPath"
+    }
+
+    $launcherLine = '"%PI_RUNTIME_DIR%node.exe" "%PI_RUNTIME_DIR%node_modules\@earendil-works\pi-coding-agent\dist\cli.js" %*'
+    if ($launcherLine -match "[`r`n]") {
+        throw "Internal error: pi.cmd launcher line contains a newline."
+    }
+
+    $piCmdContent = @(
+        '@echo off',
+        'setlocal',
+        'set "PI_RUNTIME_DIR=%~dp0"',
+        'set "PATH=%PI_RUNTIME_DIR%;%PATH%"',
+        $launcherLine
+    ) -join "`r`n"
+
+    $piCmdPath = Join-Path $RuntimeDir "pi.cmd"
+    [System.IO.File]::WriteAllText($piCmdPath, $piCmdContent + "`r`n", [System.Text.Encoding]::ASCII)
+    Test-PiLauncher -RuntimeDir $RuntimeDir
+}
+
+function Test-PiLauncher {
+    param([Parameter(Mandatory = $true)][string]$RuntimeDir)
+
+    $piCmdPath = Join-Path $RuntimeDir "pi.cmd"
+    $nodePath = Join-Path $RuntimeDir "node.exe"
+    $piCliPath = Join-Path $RuntimeDir "node_modules\@earendil-works\pi-coding-agent\dist\cli.js"
+
+    if (-not (Test-Path $piCmdPath)) { throw "pi.cmd missing: $piCmdPath" }
+    if (-not (Test-Path $nodePath)) { throw "node.exe missing: $nodePath" }
+    if (-not (Test-Path $piCliPath)) { throw "Pi CLI entry missing: $piCliPath" }
+
+    $lines = [System.IO.File]::ReadAllLines($piCmdPath, [System.Text.Encoding]::ASCII)
+    $expected = '"%PI_RUNTIME_DIR%node.exe" "%PI_RUNTIME_DIR%node_modules\@earendil-works\pi-coding-agent\dist\cli.js" %*'
+    if ($lines.Count -lt 5 -or $lines[4] -ne $expected) {
+        throw "pi.cmd launcher is invalid. Expected one command line: $expected"
+    }
+}
+
 Write-Host "================================================" -ForegroundColor Cyan
 Write-Host "  HT Logistic Workspace Installer Build" -ForegroundColor Cyan
 Write-Host "================================================" -ForegroundColor Cyan
@@ -108,18 +153,8 @@ finally {
 Write-Host "  pi package installed" -ForegroundColor Gray
 
 # 2c. Generate pi.cmd launcher (calls portable node to run pi cli.js)
-#     NOTE: here-string @"..."@ must have "@" at start of its own line.
-$piCliJs = "node_modules\@earendil-works\pi-coding-agent\dist\cli.js"
-$piCmdLines = @(
-    '@echo off',
-    'setlocal',
-    'set "PI_RUNTIME_DIR=%~dp0"',
-    'set "PATH=%PI_RUNTIME_DIR%;%PATH%"',
-    '"%PI_RUNTIME_DIR%node.exe" "%PI_RUNTIME_DIR%' + $piCliJs + '" %*'
-)
-$piCmdContent = $piCmdLines -join "`r`n"
-Set-Content -Path (Join-Path $piRuntimeDir "pi.cmd") -Value $piCmdContent -Encoding ASCII
-Write-Host "  pi.cmd launcher generated" -ForegroundColor Gray
+Write-PiLauncher -RuntimeDir $piRuntimeDir
+Write-Host "  pi.cmd launcher generated and validated" -ForegroundColor Gray
 
 # 2d. Clean up npm cache and non-runtime files to reduce size and avoid
 #     NSIS path-too-long errors (aws-sdk .d.ts paths exceed Windows MAX_PATH).
@@ -159,6 +194,8 @@ if (Test-Path $shortBuildRoot) { Remove-Item $shortBuildRoot -Recurse -Force }
 New-Item -ItemType Directory -Path $shortBuildRoot -Force | Out-Null
 # robocopy handles long paths better than Copy-Item; /MIR mirrors, /NFL /NDL no file/dir listing
 robocopy $piRuntimeDir $shortPiRuntimeDir /MIR /NFL /NDL /NJH /NJS | Out-Null
+Test-PiLauncher -RuntimeDir $shortPiRuntimeDir
+Write-Host "  short-path pi-runtime validated" -ForegroundColor Gray
 
 # ---------- 3. Clean sidecar temp + build Tauri installer ----------
 Write-Host ""
