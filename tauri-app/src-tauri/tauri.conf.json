@@ -60,7 +60,7 @@
       "endpoints": [
         "https://github.com/jameszeng222/ht-logistic-workspace/releases/latest/download/latest.json"
       ],
-      "pubkey": "RWSTBGFvuPiXrPGEImVEhnCuZCqDvXpI8peS8OUSoTs+XpN1uvDulwgA",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFDOTdGOEI4NkY2MTA0OTMKUldTVEJHRnZ1UGlYclBHRUltVkVobkN1WkNxRHZYcEk4cGVTOE9VU29UcytYcE4xdXZEdWx3Z0EK",
       "windows": {
         "installMode": "passive"
       }
