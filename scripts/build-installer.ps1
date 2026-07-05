@@ -235,10 +235,10 @@ Write-Host "[3/4] Cleaning + building Tauri installer..." -ForegroundColor Yello
 $cleanupDirs = @("build", "dist", "__pycache__", ".pytest_cache")
 foreach ($d in $cleanupDirs) {
     $p = Join-Path $sidecarDir $d
-    if (Test-Path $p) { Remove-Item $p -Recurse -Force }
+    if (Test-Path $p) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
 }
 Get-ChildItem $sidecarDir -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
-    ForEach-Object { Remove-Item $_.FullName -Recurse -Force }
+    ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
 
 # ---------- 3. Clean sidecar temp + build Tauri installer ----------
 Write-Host ""
@@ -265,10 +265,10 @@ if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
 $cleanupDirs = @("build", "dist", "__pycache__", ".pytest_cache")
 foreach ($d in $cleanupDirs) {
     $p = Join-Path $sidecarDir $d
-    if (Test-Path $p) { Remove-Item $p -Recurse -Force }
+    if (Test-Path $p) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
 }
 Get-ChildItem $sidecarDir -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
-    ForEach-Object { Remove-Item $_.FullName -Recurse -Force }
+    ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
 
 Push-Location $tauriDir
 try {
