@@ -36,11 +36,18 @@ try {
     pip install -r requirements.txt --quiet
     pip install pyinstaller --quiet
     Write-Host "  Running PyInstaller..." -ForegroundColor Gray
-    # PyInstaller writes INFO logs to stderr, which PowerShell treats as errors.
-    # Use cmd.exe to redirect both stdout+stderr to nul, avoiding NativeCommandError.
-    cmd /c "pyinstaller ht-sidecar.spec --noconfirm --clean >nul 2>&1"
-    if (-not (Test-Path "dist\ht-sidecar.exe")) {
-        throw "PyInstaller failed: dist\ht-sidecar.exe not found"
+    # PyInstaller writes INFO logs to stderr, which PowerShell treats as errors
+    # (NativeCommandError). Route stdout+stderr to a log file via cmd.exe so we
+    # can check $LASTEXITCODE and inspect the log if it fails.
+    $pyinstallerLog = Join-Path $env:TEMP "ht-pyinstaller.log"
+    cmd /c "pyinstaller ht-sidecar.spec --noconfirm --clean > `"$pyinstallerLog`" 2>&1"
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path "dist\ht-sidecar.exe")) {
+        Write-Host "  PyInstaller log:" -ForegroundColor Red
+        if (Test-Path $pyinstallerLog) {
+            Get-Content $pyinstallerLog -Tail 50 | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
+            Write-Host "  Full log: $pyinstallerLog" -ForegroundColor Gray
+        }
+        throw "PyInstaller failed (exit code $LASTEXITCODE). See log above."
     }
     Copy-Item "dist\ht-sidecar.exe" "ht-sidecar.exe" -Force
     Write-Host "  sidecar exe ready" -ForegroundColor Green
@@ -81,11 +88,18 @@ Set-Content -Path (Join-Path $piRuntimeDir "package.json") -Value $pkgJson
 
 Push-Location $piRuntimeDir
 try {
-    # npm writes progress/logs to stderr; route through cmd to avoid NativeCommandError
+    # npm writes progress/logs to stderr; route through cmd to a log file to
+    # avoid NativeCommandError and surface diagnostics on failure.
+    $npmLog = Join-Path $env:TEMP "ht-npm-install.log"
     $npmExe = Join-Path $piRuntimeDir "node.exe"
-    cmd /c "`"$npmExe`" `"$npmCli`" install @earendil-works/pi-coding-agent --no-save --ignore-scripts >nul 2>&1"
-    if (-not (Test-Path "node_modules\@earendil-works\pi-coding-agent")) {
-        throw "pi package install failed"
+    cmd /c "`"$npmExe`" `"$npmCli`" install @earendil-works/pi-coding-agent --no-save --ignore-scripts > `"$npmLog`" 2>&1"
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path "node_modules\@earendil-works\pi-coding-agent")) {
+        Write-Host "  npm install log:" -ForegroundColor Red
+        if (Test-Path $npmLog) {
+            Get-Content $npmLog -Tail 30 | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
+            Write-Host "  Full log: $npmLog" -ForegroundColor Gray
+        }
+        throw "pi package install failed (exit code $LASTEXITCODE). See log above."
     }
 }
 finally {
