@@ -294,15 +294,6 @@ export const ToolsPanel = forwardRef<ToolsPanelHandle, ToolsPanelProps>(function
 
   return (
     <div className="tools-panel">
-      <div className="tools-header">
-        <div>
-          <div className="tools-title">工具执行区</div>
-        </div>
-        <div className={`sidecar-status ${sidecarReady ? "ready" : "error"}`}>
-          <span className="dot" />
-          {sidecarReady ? "Sidecar 在线" : sidecarError ? "Sidecar 异常" : "Sidecar 启动中…"}
-        </div>
-      </div>
       {sidecarError && (
         <div className="tools-banner error">{sidecarError}</div>
       )}
@@ -337,9 +328,20 @@ export const ToolsPanel = forwardRef<ToolsPanelHandle, ToolsPanelProps>(function
         )}
 
         <div className="tools-detail">
+          {/* 顶行：左侧工具名（发票/箱单生成），右侧"工具执行区"标签 + Sidecar 状态
+              原 .tools-header 独立行已合并到这里，省出的纵向空间还给上方聊天输出窗口 */}
+          <div className="tool-detail-top">
+            <div className="tool-detail-title">{activeTool ? activeTool.name : "工具执行区"}</div>
+            <div className="tool-detail-status">
+              <span className="tools-title-tag">工具执行区</span>
+              <div className={`sidecar-status ${sidecarReady ? "ready" : "error"}`}>
+                <span className="dot" />
+                {sidecarReady ? "Sidecar 在线" : sidecarError ? "Sidecar 异常" : "Sidecar 启动中…"}
+              </div>
+            </div>
+          </div>
           {activeTool ? (
             <>
-              <div className="tool-detail-title">{activeTool.name}</div>
               <div className="tool-detail-desc">{activeTool.description}</div>
 
               {/* 选文件区（点击弹原生对话框）*/}

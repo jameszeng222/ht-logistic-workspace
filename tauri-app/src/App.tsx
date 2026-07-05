@@ -21,6 +21,7 @@ import { ChartView, extractChartConfig } from "./Chart";
 import { ToolsPanel, type ToolsPanelHandle, type ToolDef } from "./ToolsPanel";
 import { FileBrowser } from "./FileBrowser";
 import type { ToolCall, AssistantMsg, Turn } from "./types";
+import pilotAvatar from "./assets/pilot-avatar.png";
 import "./styles.css";
 
 // ============ 类型 ============
@@ -1172,7 +1173,9 @@ export default function App() {
           }}
           title={workdir ? `工作目录：${workdir}（点击切换）` : "设置工作目录（输入输出文件都存这里）"}
         >
-          {workdir ? (workdir.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || workdir) : "设置工作目录"}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+          </svg>
         </button>
         {/* 主题切换 */}
         <button
@@ -1354,7 +1357,7 @@ export default function App() {
                 <div className="empty-state">
                   <div className="empty-mark">HT LOGISTIC AGENT</div>
                   <h3>Logistic Workspace</h3>
-                  <p><span className="empty-pilot">Pilot</span> · 物流工作台 AI 调度员</p>
+                  <p><img className="empty-pilot-avatar" src={pilotAvatar} alt="Pilot" /> · 物流工作台 AI 调度员</p>
                   <div className="empty-suggestions" style={{ display: "none" }} />
                 </div>
               ) : turns.map((turn) => (

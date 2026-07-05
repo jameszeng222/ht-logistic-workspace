@@ -229,7 +229,7 @@ body {
   align-items: center;
   gap: var(--space-2);
   font-weight: 600;
-  font-size: var(--text-lg);
+  font-size: 16px;
   letter-spacing: -0.01em;
 }
 .app-brand-mark {
@@ -291,16 +291,16 @@ body {
 .header-status.error .dot { background: var(--danger); }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
 
-/* 工作目录按钮：中性 fg 强调，不用 primary 蓝 */
+/* 工作目录按钮：文件夹图标按钮（无文字） */
 .workdir-btn {
   background: var(--surface);
   border-color: var(--border-subtle);
   color: var(--fg);
   font-weight: 500;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .workdir-btn:hover:not(:disabled) {
   background: var(--surface-hover);
@@ -654,7 +654,7 @@ body {
 .tool-workbench .tools-body:not(:has(.tools-list)) .tools-detail {
   width: 100%;
 }
-/* 标题与执行卡片左/右边对齐：同样 max-width 720px 居中 */
+/* 标题与执行卡片左/右边对齐：tools-header 已合并进 tools-detail 顶行，此规则保留以防 hideNav=false 旧布局 */
 .tool-workbench .tools-header {
   max-width: 720px;
   margin: 0 auto var(--space-2);
@@ -744,6 +744,15 @@ body {
   color: #1B6B5C;
   font-weight: 600;
   letter-spacing: 0.04em;
+}
+/* Pilot 头像（首页空状态）：圆形裁剪，与文字基线对齐 */
+.empty-pilot-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  vertical-align: middle;
+  border: 1px solid var(--border-subtle);
 }
 .empty-suggestions {
   display: flex; flex-wrap: wrap; gap: var(--space-2);
@@ -2101,7 +2110,28 @@ body {
 .tools-panel .tool-card-desc { font-size: var(--text-xs); color: var(--fg-muted); line-height: 1.4; margin-bottom: var(--space-2); }
 .tools-panel .tool-card-meta { display: flex; gap: var(--space-2); font-size: 10px; color: var(--fg-subtle); align-items: center; }
 .tools-detail { flex: 1; padding: var(--space-3) var(--space-5); overflow-y: auto; }
-.tool-detail-title { font-size: var(--text-md); font-weight: 600; margin-bottom: var(--space-1); }
+/* 顶行：左工具名 + 右"工具执行区"标签/Sidecar 状态，同一基线对齐 */
+.tool-detail-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-1);
+}
+.tool-detail-title { font-size: var(--text-md); font-weight: 600; margin-bottom: 0; }
+.tool-detail-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+/* "工具执行区"小标签：弱化的区段标识，紧贴 Sidecar 状态左侧 */
+.tools-title-tag {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--fg-subtle);
+  letter-spacing: 0.02em;
+}
 .tool-detail-desc { font-size: var(--text-sm); color: var(--fg-muted); margin-bottom: var(--space-4); line-height: 1.5; }
 
 /* 选文件区：去白背景，仅虚线边框，hover 时柔和底色 */
