@@ -27,7 +27,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
     "externalBin": [],
     "resources": [
       "../../python-sidecar/ht-sidecar*",

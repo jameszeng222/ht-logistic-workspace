@@ -163,11 +163,5 @@ if (Test-Path (Join-Path $bundleDir "nsis")) {
         Write-Host "  NSIS installer: $($_.FullName) (${size} MB)" -ForegroundColor White
     }
 }
-if (Test-Path (Join-Path $bundleDir "msi")) {
-    Get-ChildItem (Join-Path $bundleDir "msi\*.msi") | ForEach-Object {
-        $size = [math]::Round($_.Length / 1MB, 1)
-        Write-Host "  MSI installer:  $($_.FullName) (${size} MB)" -ForegroundColor White
-    }
-}
 Write-Host ""
 Write-Host "Users just double-click the .exe to install. No Node.js/Python/Rust needed." -ForegroundColor Cyan
