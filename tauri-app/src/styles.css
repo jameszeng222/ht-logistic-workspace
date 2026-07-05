@@ -1448,20 +1448,21 @@ body {
 }
 
 /* ============ Markdown 渲染 ============ */
-.markdown { font-size: var(--text-base); line-height: var(--leading-normal); color: var(--fg); }
+.markdown { font-size: var(--text-base); line-height: 1.55; color: var(--fg); }
 .markdown > *:first-child { margin-top: 0; }
 .markdown > *:last-child { margin-bottom: 0; }
-.markdown p { margin: var(--space-2) 0; }
+/* 段落间距收紧：上下 4px，避免一句话后空一两行的稀疏感 */
+.markdown p { margin: var(--space-1) 0; }
 .markdown h1, .markdown h2, .markdown h3, .markdown h4 {
-  margin: var(--space-4) 0 var(--space-2); font-weight: 600;
+  margin: var(--space-3) 0 var(--space-1); font-weight: 600;
   line-height: var(--leading-tight); letter-spacing: -0.01em;
 }
 .markdown h1 { font-size: var(--text-xl); }
 .markdown h2 { font-size: var(--text-lg); }
 .markdown h3 { font-size: var(--text-md); }
 .markdown h4 { font-size: var(--text-base); }
-.markdown ul, .markdown ol { margin: var(--space-2) 0; padding-left: var(--space-6); }
-.markdown li { margin: var(--space-1) 0; }
+.markdown ul, .markdown ol { margin: var(--space-1) 0; padding-left: var(--space-6); }
+.markdown li { margin: 2px 0; }
 .markdown ul li::marker { color: var(--fg-muted); }
 .markdown a {
   color: var(--primary); text-decoration: none;
@@ -1471,9 +1472,9 @@ body {
 .markdown a:hover { border-bottom-color: var(--primary); }
 .markdown blockquote {
   border-left: 3px solid var(--border-strong); padding-left: var(--space-3);
-  margin: var(--space-3) 0; color: var(--fg-muted);
+  margin: var(--space-2) 0; color: var(--fg-muted);
 }
-.markdown hr { border: none; border-top: 1px solid var(--border); margin: var(--space-4) 0; }
+.markdown hr { border: none; border-top: 1px solid var(--border); margin: var(--space-3) 0; }
 .markdown strong { font-weight: 600; }
 .markdown img { max-width: 100%; border-radius: var(--radius-md); }
 
