@@ -1357,7 +1357,7 @@ export default function App() {
                 <div className="empty-state">
                   <div className="empty-mark">HT LOGISTIC AGENT</div>
                   <h3>Logistic Workspace</h3>
-                  <p><img className="empty-pilot-avatar" src={pilotAvatar} alt="Pilot" /> · 物流工作台 AI 调度员</p>
+                  <p><span className="empty-pilot">Pilot</span> · 物流工作台 AI 调度员</p>
                   <div className="empty-suggestions" style={{ display: "none" }} />
                 </div>
               ) : turns.map((turn) => (
@@ -1369,7 +1369,7 @@ export default function App() {
                   )}
                   {turn.assistantMsgs.length === 0 && turn.status === "streaming" ? (
                     <div className="msg assistant">
-                      <div className="msg-author"><span className="avatar">👩‍✈️</span><span className="author-name">Pilot</span></div>
+                      <div className="msg-author"><img className="avatar pilot-avatar" src={pilotAvatar} alt="Pilot" /><span className="author-name">Pilot</span></div>
                       <div className="msg-content">
                         <div className="msg-bubble assistant-bubble">
                           <span className="thinking-dots"><span className="dot-pulse" /><span className="dot-pulse" /><span className="dot-pulse" /></span>
@@ -1378,7 +1378,7 @@ export default function App() {
                     </div>
                   ) : turn.assistantMsgs.map((msg) => (
                     <div key={msg.id} className={`msg assistant ${msg.streaming ? "streaming" : ""}`}>
-                      <div className="msg-author"><span className="avatar">👩‍✈️</span><span className="author-name">Pilot</span></div>
+                      <div className="msg-author"><img className="avatar pilot-avatar" src={pilotAvatar} alt="Pilot" /><span className="author-name">Pilot</span></div>
                       <div className="msg-content">
                         {msg.thinking && (
                           <details className="reasoning">

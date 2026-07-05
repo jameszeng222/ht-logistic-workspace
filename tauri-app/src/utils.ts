@@ -3,6 +3,15 @@
 
 import type { Turn, AssistantMsg, ToolCall } from "./types";
 
+// Pi 在新建会话时会自发输出一段 "Welcome to Pi ... interactive tutorial" 教程欢迎语，
+// 这不是用户发起的对话，且与物流工作台场景无关，这里统一过滤掉。
+// 特征：无前置 user 消息 + 助手文本命中教程签名。
+const TUTORIAL_SIGNATURES = ["Welcome to Pi", "interactive tutorial"];
+function isTutorialWelcome(userMessage: string, assistantText: string): boolean {
+  if (userMessage.trim()) return false;
+  return TUTORIAL_SIGNATURES.some((s) => assistantText.includes(s));
+}
+
 /**
  * 从 Pi 的 get_messages 响应重建 turns。
  * messages 形如 [{role:"user",content:"..."/[{type:"text",text}],timestamp},
@@ -83,7 +92,11 @@ export function rebuildTurnsFromMessages(messages: any[]): Turn[] {
       }
     }
   }
-  return turns;
+  // 过滤掉 Pi 自发输出的教程欢迎语（无 user 消息 + 命中教程签名）
+  return turns.filter((t) => {
+    const assistantText = t.assistantMsgs.map((m) => m.text).join("");
+    return !isTutorialWelcome(t.userMessage, assistantText);
+  });
 }
 
 /** 从 content 块数组提取纯文本（user message 用） */
