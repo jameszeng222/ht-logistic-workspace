@@ -60,7 +60,7 @@
       "endpoints": [
         "https://github.com/jameszeng222/ht-logistic-workspace/releases/latest/download/latest.json"
       ],
-      "pubkey": "RWQ9oLHexjxUmQMfY0/VPNZofOkkiPu34QqrBKvVjNyLPS18iOwe/e",
+      "pubkey": "untrusted comment: minisign public key: 523131C6DEB1A00E\nRWQOoLHexjExUmQMfY0/VPNTofOkkiPu34UqrpBKvVjNyLPS18iOwe/e",
       "windows": {
         "installMode": "passive"
       }
