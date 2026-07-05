@@ -39,15 +39,27 @@ hiddenimports = (
     ]
 )
 
+# datas：只打包实际存在的目录。
+# tools/templates/ 存放用户提供的 Excel 模板（德速-模板.xlsx 等），
+# 可能尚未放入；缺失时跳过，避免 PyInstaller 报 "Unable to find"。
+# 运行时 invoice_packing.py 已有 FileNotFoundError 提示，缺模板时
+# 用户能看到清晰的错误，而不是打包阶段就失败。
+import os
+_datas = []
+for _src, _dst in [
+    ("tools/templates", "tools/templates"),
+    ("tools/assets", "tools/assets"),
+]:
+    if os.path.isdir(_src):
+        _datas.append((_src, _dst))
+    else:
+        print(f"[spec] 跳过不存在的 datas 目录: {_src}")
+
 a = Analysis(
     ["main.py"],
     pathex=["."],
     binaries=[],
-    datas=[
-        # (源, 目标相对 bundle 根) —— 把 tools/templates 和 tools/assets 一起打包
-        ("tools/templates", "tools/templates"),
-        ("tools/assets", "tools/assets"),
-    ],
+    datas=_datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
