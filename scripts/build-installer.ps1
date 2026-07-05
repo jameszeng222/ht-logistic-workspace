@@ -121,14 +121,32 @@ $piCmdContent = $piCmdLines -join "`r`n"
 Set-Content -Path (Join-Path $piRuntimeDir "pi.cmd") -Value $piCmdContent -Encoding ASCII
 Write-Host "  pi.cmd launcher generated" -ForegroundColor Gray
 
-# 2d. Clean up npm cache and non-runtime files to reduce size
+# 2d. Clean up npm cache and non-runtime files to reduce size and avoid
+#     NSIS path-too-long errors (aws-sdk .d.ts paths exceed Windows MAX_PATH).
+#     Pi runs compiled .js via node.exe — .d.ts/.ts/.map/test files are dead weight.
 Remove-Item (Join-Path $piRuntimeDir "package.json") -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $piRuntimeDir "package-lock.json") -Force -ErrorAction SilentlyContinue
-Get-ChildItem $piRuntimeDir -Recurse -Include "*.md","*.map","*.markdown" -ErrorAction SilentlyContinue |
-    ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+
+# Non-runtime file extensions (TypeScript declarations, source maps, docs, etc.)
+$junkExts = @("*.md","*.markdown","*.map","*.d.ts","*.ts","*.flow","*.coffee","*.tsbuildinfo","*.text","*.txt")
+foreach ($ext in $junkExts) {
+    Get-ChildItem $piRuntimeDir -Recurse -Include $ext -File -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+}
+
+# Junk directories (tests, docs, type defs, npm bin scripts, IDE configs)
+$junkDirs = @("__tests__","__mocks__","tests","test","docs","documentation",".github",".bin",".vscode",".idea","coverage","node_modules/.cache")
+foreach ($sub in $junkDirs) {
+    $p = Join-Path $piRuntimeDir $sub
+    if (Test-Path $p) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# Remove @types packages entirely (TypeScript type definitions, not used at runtime)
+Get-ChildItem (Join-Path $piRuntimeDir "node_modules\@types") -Directory -ErrorAction SilentlyContinue |
+    ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
 
 $runtimeSize = [math]::Round((Get-ChildItem $piRuntimeDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
-Write-Host "  pi-runtime ready (about ${runtimeSize} MB)" -ForegroundColor Green
+Write-Host "  pi-runtime ready (about ${runtimeSize} MB after cleanup)" -ForegroundColor Green
 
 # ---------- 3. Clean sidecar temp + build Tauri installer ----------
 Write-Host ""
