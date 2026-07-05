@@ -114,15 +114,17 @@ echo ""
 echo -e "\033[33m[3/4] 清理 + 构建 Tauri 安装器...\033[0m"
 
 # 3a. 校验 updater 签名密钥（未配置则警告，但仍继续构建）
-if [ -z "${TAURI_PRIVATE_KEY:-}" ]; then
+#     NOTE: Tauri v2 官方环境变量名是 TAURI_SIGNING_PRIVATE_KEY 和
+#     TAURI_SIGNING_PRIVATE_KEY_PASSWORD（见 v2.tauri.app/reference/environment-variables）。
+if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
     echo ""
-    echo -e "\033[31mWARNING: TAURI_PRIVATE_KEY 环境变量未设置。\033[0m"
+    echo -e "\033[31mWARNING: TAURI_SIGNING_PRIVATE_KEY 环境变量未设置。\033[0m"
     echo -e "\033[33m  没有签名密钥，updater 的 .sig 文件不会生成，自动更新会失败签名校验。\033[0m"
     echo -e "\033[33m  生成密钥对：\033[0m"
     echo "    npm run tauri signer generate -- -w \$HOME/.tauri/ht-logistic.key"
     echo -e "\033[33m  构建前设置：\033[0m"
-    echo "    export TAURI_PRIVATE_KEY=\$(cat \$HOME/.tauri/ht-logistic.key)"
-    echo "    export TAURI_KEY_PASSWORD='your-password-if-set'"
+    echo "    export TAURI_SIGNING_PRIVATE_KEY=\$(cat \$HOME/.tauri/ht-logistic.key)"
+    echo "    export TAURI_SIGNING_PRIVATE_KEY_PASSWORD='your-password-if-set'"
     echo -e "\033[33m  继续构建（不带 updater 签名，自动更新不可用）...\033[0m"
     echo ""
 fi
@@ -186,7 +188,7 @@ if [ -f "$INSTALLER_SIG" ]; then
     SIGNATURE=$(cat "$INSTALLER_SIG" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 else
     echo -e "\033[33m  WARNING: .sig 文件不存在: $INSTALLER_SIG\033[0m"
-    echo -e "\033[33m  自动更新不可用。是否设置了 TAURI_PRIVATE_KEY？\033[0m"
+    echo -e "\033[33m  自动更新不可用。是否设置了 TAURI_SIGNING_PRIVATE_KEY？\033[0m"
 fi
 
 # 根据当前平台选择 target key

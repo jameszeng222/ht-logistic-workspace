@@ -213,16 +213,19 @@ Write-Host ""
 Write-Host "[3/4] Cleaning + building Tauri installer..." -ForegroundColor Yellow
 
 # 3a. Verify updater signing key is configured (required to generate .sig artifacts)
-if (-not $env:TAURI_PRIVATE_KEY) {
+#     NOTE: Tauri v2 官方环境变量名是 TAURI_SIGNING_PRIVATE_KEY 和
+#     TAURI_SIGNING_PRIVATE_KEY_PASSWORD（见 v2.tauri.app/reference/environment-variables）。
+#     写成 TAURI_PRIVATE_KEY 不会生效，.sig 不会生成。
+if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
     Write-Host ""
-    Write-Host "WARNING: TAURI_PRIVATE_KEY environment variable not set." -ForegroundColor Red
+    Write-Host "WARNING: TAURI_SIGNING_PRIVATE_KEY environment variable not set." -ForegroundColor Red
     Write-Host "  Without the signing key, the updater .sig file won't be generated," -ForegroundColor Yellow
     Write-Host "  and auto-update will fail signature verification." -ForegroundColor Yellow
     Write-Host "  Generate a key pair with:" -ForegroundColor Yellow
     Write-Host "    npm run tauri signer generate -- -w `$HOME/.tauri/ht-logistic.key" -ForegroundColor Gray
     Write-Host "  Then set before running this script:" -ForegroundColor Yellow
-    Write-Host "    `$env:TAURI_PRIVATE_KEY = Get-Content `$HOME/.tauri/ht-logistic.key -Raw" -ForegroundColor Gray
-    Write-Host "    `$env:TAURI_KEY_PASSWORD = 'your-password-if-set'" -ForegroundColor Gray
+    Write-Host "    `$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content `$HOME/.tauri/ht-logistic.key -Raw" -ForegroundColor Gray
+    Write-Host "    `$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = 'your-password-if-set'" -ForegroundColor Gray
     Write-Host "  Continuing build WITHOUT updater signature (auto-update disabled)..." -ForegroundColor Yellow
     Write-Host ""
 }
@@ -279,7 +282,7 @@ if (Test-Path $setupSig) {
     $signature = (Get-Content $setupSig -Raw).Trim()
 } else {
     Write-Host "  WARNING: .sig file not found at $setupSig" -ForegroundColor Yellow
-    Write-Host "  Auto-update will not work. Did you set TAURI_PRIVATE_KEY?" -ForegroundColor Yellow
+    Write-Host "  Auto-update will not work. Did you set TAURI_SIGNING_PRIVATE_KEY?" -ForegroundColor Yellow
 }
 
 # Build the updater manifest consumed by the client's check() call.
