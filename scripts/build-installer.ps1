@@ -36,7 +36,9 @@ try {
     pip install -r requirements.txt --quiet
     pip install pyinstaller --quiet
     Write-Host "  Running PyInstaller..." -ForegroundColor Gray
-    pyinstaller ht-sidecar.spec --noconfirm --clean 2>&1 | Out-Null
+    # PyInstaller writes INFO logs to stderr, which PowerShell treats as errors.
+    # Use cmd.exe to redirect both stdout+stderr to nul, avoiding NativeCommandError.
+    cmd /c "pyinstaller ht-sidecar.spec --noconfirm --clean >nul 2>&1"
     if (-not (Test-Path "dist\ht-sidecar.exe")) {
         throw "PyInstaller failed: dist\ht-sidecar.exe not found"
     }
@@ -79,7 +81,9 @@ Set-Content -Path (Join-Path $piRuntimeDir "package.json") -Value $pkgJson
 
 Push-Location $piRuntimeDir
 try {
-    & (Join-Path $piRuntimeDir "node.exe") $npmCli install "@earendil-works/pi-coding-agent" --no-save --ignore-scripts 2>&1 | Out-Null
+    # npm writes progress/logs to stderr; route through cmd to avoid NativeCommandError
+    $npmExe = Join-Path $piRuntimeDir "node.exe"
+    cmd /c "`"$npmExe`" `"$npmCli`" install @earendil-works/pi-coding-agent --no-save --ignore-scripts >nul 2>&1"
     if (-not (Test-Path "node_modules\@earendil-works\pi-coding-agent")) {
         throw "pi package install failed"
     }
