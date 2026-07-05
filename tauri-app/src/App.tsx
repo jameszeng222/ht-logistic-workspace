@@ -1271,11 +1271,6 @@ export default function App() {
                             ) : (
                               <div className="session-name">{s.title || "未命名会话"}</div>
                             )}
-                            {!isRenaming && (
-                              <div className="session-meta">
-                                {formatTime(s.mtime)}
-                              </div>
-                            )}
                           </div>
                           {isActive && !isRenaming && (
                             <div className="session-actions">
@@ -1352,12 +1347,14 @@ export default function App() {
         {/* 主区 */}
         <main className={`main ${turns.length === 0 ? "main-empty" : ""}`}>
           <div className="messages" ref={messagesRef} onScroll={handleScroll}>
-            {/* 标题条：左侧显示当前会话名，sticky 钉在消息区顶部 */}
-            <div className="chat-titlebar">
-              <span className="chat-titlebar-name" title={currentSessionName || undefined}>
-                {currentSessionName || "新会话"}
-              </span>
-            </div>
+            {/* 标题条：仅在有对话或已命名会话时显示，新会话空状态不显示 */}
+            {(turns.length > 0 || currentSessionName) && (
+              <div className="chat-titlebar">
+                <span className="chat-titlebar-name" title={currentSessionName || undefined}>
+                  {currentSessionName || "新会话"}
+                </span>
+              </div>
+            )}
             <div className="messages-inner">
               {turns.length === 0 ? (
                 <div className="empty-state">
@@ -2050,17 +2047,6 @@ function ToolCard({ tool, onToggle }: { tool: ToolCall; onToggle: () => void }) 
 }
 
 // ============ 工具函数 ============
-function formatTime(unix: number): string {
-  if (!unix) return "";
-  const d = new Date(unix * 1000);
-  const now = new Date();
-  const diff = (now.getTime() - d.getTime()) / 1000;
-  if (diff < 60) return "刚刚";
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
-  return d.toLocaleDateString();
-}
-
 function formatToolSummary(name: string, args: any): string {
   if (!args) return "";
   switch (name) {

@@ -365,9 +365,9 @@ body {
 }
 .body.sidebar-hidden { grid-template-columns: 0 1fr; }
 .body.sidebar-hidden .sidebar { display: none; }
-/* 空状态：消息区缩小、工具区放大（工具区在第 2 行，输入框在第 3 行 auto）*/
+/* 空状态：消息区缩小、工具区适度放大（卡片跟随内容高度，行高不再过度膨胀）*/
 .body:has(.main.main-empty) {
-  grid-template-rows: minmax(190px, 0.74fr) minmax(310px, 0.94fr) auto;
+  grid-template-rows: minmax(220px, 0.78fr) minmax(220px, 0.5fr) auto;
 }
 
 /* ============ 侧栏 ============ */
@@ -485,15 +485,14 @@ body {
   font-size: 10px;
   font-weight: 600;
 }
-.session-group-items { display: flex; flex-direction: column; gap: var(--space-1); }
+.session-group-items { display: flex; flex-direction: column; gap: 1px; }
 .session-item {
   display: flex; align-items: center; gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-3);
   border-radius: var(--radius);
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease);
   position: relative;
-  margin-bottom: var(--space-1);
 }
 .session-item:hover { background: var(--surface-hover); }
 .session-item.active { background: var(--primary-soft); }
@@ -620,9 +619,9 @@ body {
   grid-row: 2;
   background: transparent;
   border-top: 1px solid var(--border-subtle);
-  /* 顶部留白加大，把执行卡片往下推，减少下方留白 */
-  padding: var(--space-5) var(--space-6) var(--space-3);
-  max-height: 340px;
+  /* 顶部留白加大，把执行卡片往下推；底部留白收紧避免卡片下方空白 */
+  padding: var(--space-4) var(--space-6) var(--space-2);
+  max-height: 260px;
 }
 /* 工具面板：去白背景，与主背景融合。仅用细分隔线区隔，无卡片边框/阴影。 */
 .tool-workbench .tools-panel {
@@ -646,12 +645,12 @@ body {
   flex: 1;
   max-width: 820px;
   margin: 0 auto;
-  padding: var(--space-4) var(--space-5);
+  padding: var(--space-3) var(--space-5);
   background: var(--surface-hover);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  /* 撑满 workbench 高度，消除卡片下方留白 */
-  align-self: stretch;
+  /* 不撑满容器：卡片高度跟随内容，避免执行按钮下方留白 */
+  align-self: flex-start;
 }
 /* 当 hideNav 隐藏 tools-list 后，执行区独占整行居中 */
 .tool-workbench .tools-body:not(:has(.tools-list)) .tools-detail {
@@ -665,7 +664,7 @@ body {
 }
 .tool-workbench .tools-list {
   width: 240px;
-  max-height: 340px;
+  max-height: 260px;
   overflow-y: auto;
   border-right: 1px solid var(--border-subtle);
   border-bottom: 0;
@@ -689,6 +688,7 @@ body {
   background: color-mix(in oklch, var(--bg) 88%, transparent);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border-subtle);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 .chat-titlebar-name {
   font-size: var(--text-sm);
@@ -2244,7 +2244,7 @@ body {
     display: none;
   }
   .tool-workbench {
-    max-height: 340px;
+    max-height: 260px;
   }
   .tool-workbench .tools-body {
     flex-direction: column;
