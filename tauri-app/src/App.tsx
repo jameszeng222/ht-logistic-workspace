@@ -448,10 +448,9 @@ export default function App() {
         setTurns((prev) => {
           // 先把所有 streaming 标记为 done
           let next = prev.map((t) => t.status === "streaming" ? { ...t, status: "done" as const } : t);
-          // 过滤 Pi 自发输出的教程欢迎语（无 user 消息 + 命中教程签名）。
-          // 实时流也过滤，避免用户看到"欢迎来到 Pi 的教程之旅"等无关输出。
+          // 过滤 Pi 输出的教程欢迎语（命中教程签名即过滤，不要求 userMessage 为空，
+          // 因为 Pi 会把教程当首条消息的回复输出）。
           next = next.filter((t) => {
-            if (t.userMessage.trim()) return true;
             const assistantText = t.assistantMsgs.map((m) => m.text).join("");
             return !isTutorialWelcome(t.userMessage, assistantText);
           });
