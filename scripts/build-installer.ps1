@@ -148,6 +148,18 @@ Get-ChildItem (Join-Path $piRuntimeDir "node_modules\@types") -Directory -ErrorA
 $runtimeSize = [math]::Round((Get-ChildItem $piRuntimeDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
 Write-Host "  pi-runtime ready (about ${runtimeSize} MB after cleanup)" -ForegroundColor Green
 
+# 2e. Copy pi-runtime to a short path (C:\ht-build\) to avoid NSIS MAX_PATH
+#     errors. Even after cleanup, some .js files from @mistralai/@aws-sdk have
+#     paths >260 chars under the repo dir. NSIS makensis uses ANSI Win32 APIs
+#     that hard-fail on long paths regardless of LongPathsEnabled registry setting.
+$shortBuildRoot = "C:\ht-build"
+$shortPiRuntimeDir = Join-Path $shortBuildRoot "pi-runtime"
+Write-Host "  Copying pi-runtime to short path ($shortPiRuntimeDir)..." -ForegroundColor Gray
+if (Test-Path $shortBuildRoot) { Remove-Item $shortBuildRoot -Recurse -Force }
+New-Item -ItemType Directory -Path $shortBuildRoot -Force | Out-Null
+# robocopy handles long paths better than Copy-Item; /MIR mirrors, /NFL /NDL no file/dir listing
+robocopy $piRuntimeDir $shortPiRuntimeDir /MIR /NFL /NDL /NJH /NJS | Out-Null
+
 # ---------- 3. Clean sidecar temp + build Tauri installer ----------
 Write-Host ""
 Write-Host "[3/4] Cleaning + building Tauri installer..." -ForegroundColor Yellow
@@ -167,6 +179,11 @@ try {
 }
 finally {
     Pop-Location
+}
+
+# 3b. Clean up short-path build dir (C:\ht-build) — no longer needed after NSIS packaging
+if (Test-Path $shortBuildRoot) {
+    Remove-Item $shortBuildRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # ---------- 4. Print output paths ----------
