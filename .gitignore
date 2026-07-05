@@ -6,6 +6,9 @@ python-sidecar/venv/
 python-sidecar/build/
 python-sidecar/dist/
 python-sidecar/*.egg-info/
+# PyInstaller 打包产物（构建时生成，不提交）
+python-sidecar/ht-sidecar
+python-sidecar/ht-sidecar.exe
 
 # Tauri / Node
 tauri-app/node_modules/
