@@ -111,6 +111,9 @@ if (Test-Path $piRuntimeDir) {
 New-Item -ItemType Directory -Path $piRuntimeDir -Force | Out-Null
 
 # 2a. Download portable Node.js (x64)
+#     用 .NET WebClient + 断点续传 + 3 次重试，替代 Invoke-WebRequest。
+#     国内网络下 IWR 经常中途断流（"从传输流收到意外的 EOF"），WebClient
+#     支持超时显式设置和断点续传，更稳。
 $nodeVersion = "v22.20.0"
 $nodeArch = "x64"
 $nodeUrl = "https://nodejs.org/dist/$nodeVersion/node-$nodeVersion-win-$nodeArch.zip"
@@ -119,11 +122,78 @@ $nodeExtractDir = Join-Path $env:TEMP "node-portable-extract"
 
 Write-Host "  Downloading Node.js $nodeVersion (win-$nodeArch)..." -ForegroundColor Gray
 if (Test-Path $nodeExtractDir) { Remove-Item $nodeExtractDir -Recurse -Force }
-Invoke-WebRequest -Uri $nodeUrl -OutFile $nodeZip -UseBasicParsing
+
+# 下载函数：带断点续传 + 重试。成功返回 $true。
+function Download-File-With-Retry {
+    param([string]$Url, [string]$OutFile, [int]$MaxRetries = 3)
+    for ($i = 1; $i -le $MaxRetries; $i++) {
+        try {
+            # 断点续传：若已有部分文件，从已下载字节数继续
+            $startByte = 0
+            if (Test-Path $OutFile) {
+                $existingLen = (Get-Item $OutFile).Length
+                # 只在文件小于远程大小时续传（避免完整文件重复下）
+                try {
+                    $resp = Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -TimeoutSec 15
+                    $remoteLen = [int64]$resp.Headers["Content-Length"]
+                    if ($existingLen -ge $remoteLen -and $remoteLen -gt 0) {
+                        Write-Host "    已下载完整文件，跳过" -ForegroundColor Gray
+                        return $true
+                    }
+                    $startByte = $existingLen
+                } catch {
+                    # Head 请求失败就删了重下
+                    Remove-Item $OutFile -Force -ErrorAction SilentlyContinue
+                    $startByte = 0
+                }
+            }
+            if ($startByte -eq 0) {
+                Remove-Item $OutFile -Force -ErrorAction SilentlyContinue
+            } else {
+                Write-Host "    断点续传从 $startByte 字节继续..." -ForegroundColor Gray
+            }
+
+            $client = New-Object System.Net.WebClient
+            $client.Headers.Add("User-Agent", "PowerShell-build-installer")
+            if ($startByte -gt 0) {
+                $client.Headers.Add("Range", "bytes=$startByte-")
+            }
+            # 总超时 10 分钟（大文件慢网兜底）
+            $client.DownloadFile($Url, $OutFile + ".part")
+            if ($startByte -gt 0 -and (Test-Path $OutFile)) {
+                # 续传时 .part 是剩余部分，拼接到原文件后面
+                $origBytes = [System.IO.File]::ReadAllBytes($OutFile)
+                $partBytes = [System.IO.File]::ReadAllBytes($OutFile + ".part")
+                $combined = New-Object byte[] ($origBytes.Length + $partBytes.Length)
+                [Array]::Copy($origBytes, 0, $combined, 0, $origBytes.Length)
+                [Array]::Copy($partBytes, 0, $combined, $origBytes.Length, $partBytes.Length)
+                [System.IO.File]::WriteAllBytes($OutFile, $combined)
+                Remove-Item $OutFile".part" -Force
+            } else {
+                Move-Item $OutFile".part" $OutFile -Force
+            }
+            Write-Host "    下载完成（尝试 $i）" -ForegroundColor Gray
+            return $true
+        } catch {
+            Write-Host "    下载失败（尝试 $i/$MaxRetries）：$($_.Exception.Message)" -ForegroundColor Yellow
+            if ($i -lt $MaxRetries) {
+                Write-Host "    等待 3 秒后重试..." -ForegroundColor Gray
+                Start-Sleep -Seconds 3
+            }
+        }
+    }
+    return $false
+}
+
+$dlOk = Download-File-With-Retry -Url $nodeUrl -OutFile $nodeZip -MaxRetries 3
+if (-not $dlOk) {
+    throw "Node.js 下载失败（已重试 3 次）。请检查网络或手动下载 $nodeUrl 到 $nodeZip"
+}
+
 Expand-Archive -Path $nodeZip -DestinationPath $nodeExtractDir -Force
 $nodeDir = Get-ChildItem -Path $nodeExtractDir -Directory | Select-Object -First 1
 Copy-Item (Join-Path $nodeDir.FullName "node.exe") $piRuntimeDir -Force
-Write-Host "  node.exe ready" -ForegroundColor Gray
+Write-Host "  node.exe ready" -ForegroundColor Green
 
 # 2b. Use portable node to run npm and install pi package
 Write-Host "  Installing pi package into pi-runtime..." -ForegroundColor Gray
