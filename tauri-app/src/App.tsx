@@ -1352,6 +1352,12 @@ export default function App() {
         {/* 主区 */}
         <main className={`main ${turns.length === 0 ? "main-empty" : ""}`}>
           <div className="messages" ref={messagesRef} onScroll={handleScroll}>
+            {/* 标题条：左侧显示当前会话名，sticky 钉在消息区顶部 */}
+            <div className="chat-titlebar">
+              <span className="chat-titlebar-name" title={currentSessionName || undefined}>
+                {currentSessionName || "新会话"}
+              </span>
+            </div>
             <div className="messages-inner">
               {turns.length === 0 ? (
                 <div className="empty-state">

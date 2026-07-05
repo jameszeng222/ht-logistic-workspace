@@ -620,9 +620,9 @@ body {
   grid-row: 2;
   background: transparent;
   border-top: 1px solid var(--border-subtle);
-  /* 顶部留白加大，把执行卡片往下推，减少下方留白 */
-  padding: var(--space-5) var(--space-6) var(--space-4);
-  max-height: 420px;
+  /* 顶部 padding 收回，让出空间给上方聊天标题条 */
+  padding: var(--space-3) var(--space-6) var(--space-3);
+  max-height: 340px;
 }
 /* 工具面板：去白背景，与主背景融合。仅用细分隔线区隔，无卡片边框/阴影。 */
 .tool-workbench .tools-panel {
@@ -678,9 +678,27 @@ body {
   grid-row: 1 / -1;
 }
 .messages { min-height: 0; overflow-y: auto; overflow-x: hidden; position: relative; grid-row: 1; }
+/* 聊天标题条：sticky 钉在消息区顶部，左侧显示当前会话名。
+   与下方消息同 max-width 居中对齐，背景用 bg-elevated + 模糊，滚动时不被消息盖住。 */
+.chat-titlebar {
+  position: sticky; top: 0; z-index: 5;
+  max-width: var(--content-max); margin: 0 auto;
+  padding: var(--space-2) var(--space-5);
+  background: color-mix(in oklch, var(--bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.chat-titlebar-name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--fg);
+  letter-spacing: 0.01em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: inline-block; max-width: 100%;
+}
 .messages-inner {
   max-width: var(--content-max); margin: 0 auto;
-  padding: var(--space-5) 0 var(--space-6);
+  padding: var(--space-2) 0 var(--space-6);
   display: flex; flex-direction: column; gap: var(--space-6);
 }
 
