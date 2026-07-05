@@ -26,6 +26,10 @@ struct PiState {
     child: Mutex<Option<Child>>,
     response_channels: ResponseMap,
     next_request_id: AtomicU64,
+    /// 进程代际号：每次 spawn_pi 自增。stdout reader 线程持有一份快照，
+    /// 退出时仅当代际匹配才 emit `pi_process_exit`，
+    /// 避免 restart_pi 后旧进程退出事件把前端的 ready 错误地打回 false。
+    process_gen: AtomicU64,
 }
 
 /// Python 工具 sidecar 状态。
@@ -332,6 +336,8 @@ fn spawn_pi(
 
     *state.stdin.lock().unwrap() = Some(stdin);
     *state.child.lock().unwrap() = Some(child);
+    // 自增代际号，本进程的 stdout reader 持有此快照，退出时据此判断是否为当前进程
+    let my_gen = state.process_gen.fetch_add(1, Ordering::SeqCst) + 1;
 
     // stdout reader 线程：response 路由到 channel，event emit 给前端
     let app2 = app.clone();
@@ -359,11 +365,18 @@ fn spawn_pi(
                 Err(_) => break,
             }
         }
-        let _ = app2.emit("pi-event", serde_json::json!({ "type": "pi_process_exit" }));
-        // pi 进程已退出：清理所有 pending 请求的 response channel，
-        // 使等待中的 send_request 立即收到"响应通道关闭"而非等满 10s 超时。
-        if let Some(state) = app2.try_state::<PiState>() {
-            state.response_channels.lock().unwrap().clear();
+        // 仅当本进程仍是当前代际（未被 restart_pi 替换）时，才 emit 退出事件。
+        // 否则这是被 restart 触发的旧进程退出，新进程已接管，不应把前端 ready 打回 false。
+        let is_current = app2.try_state::<PiState>()
+            .map(|s| s.process_gen.load(Ordering::SeqCst) == my_gen)
+            .unwrap_or(false);
+        if is_current {
+            let _ = app2.emit("pi-event", serde_json::json!({ "type": "pi_process_exit" }));
+            // pi 进程已退出：清理所有 pending 请求的 response channel，
+            // 使等待中的 send_request 立即收到"响应通道关闭"而非等满 10s 超时。
+            if let Some(state) = app2.try_state::<PiState>() {
+                state.response_channels.lock().unwrap().clear();
+            }
         }
     });
 
@@ -1366,6 +1379,7 @@ fn main() {
             child: Mutex::new(None),
             response_channels: Arc::new(Mutex::new(HashMap::new())),
             next_request_id: AtomicU64::new(1),
+            process_gen: AtomicU64::new(0),
         })
         .manage(SidecarState {
             child: Mutex::new(None),

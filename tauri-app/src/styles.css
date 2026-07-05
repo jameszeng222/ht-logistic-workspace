@@ -620,8 +620,8 @@ body {
   grid-row: 2;
   background: transparent;
   border-top: 1px solid var(--border-subtle);
-  /* 顶部 padding 收回，让出空间给上方聊天标题条 */
-  padding: var(--space-3) var(--space-6) var(--space-3);
+  /* 顶部留白加大，把执行卡片往下推，减少下方留白 */
+  padding: var(--space-5) var(--space-6) var(--space-3);
   max-height: 340px;
 }
 /* 工具面板：去白背景，与主背景融合。仅用细分隔线区隔，无卡片边框/阴影。 */
@@ -650,6 +650,8 @@ body {
   background: var(--surface-hover);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
+  /* 撑满 workbench 高度，消除卡片下方留白 */
+  align-self: stretch;
 }
 /* 当 hideNav 隐藏 tools-list 后，执行区独占整行居中 */
 .tool-workbench .tools-body:not(:has(.tools-list)) .tools-detail {
