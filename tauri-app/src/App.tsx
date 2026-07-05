@@ -16,7 +16,7 @@ import type { PiEvent } from "./pi-client";
 import { Markdown } from "./Markdown";
 import { CommandPalette } from "./CommandPalette";
 import { ExtensionManager } from "./ExtensionManager";
-import { rebuildTurnsFromMessages } from "./utils";
+import { rebuildTurnsFromMessages, isTutorialWelcome } from "./utils";
 import { ChartView, extractChartConfig } from "./Chart";
 import { ToolsPanel, type ToolsPanelHandle, type ToolDef } from "./ToolsPanel";
 import { FileBrowser } from "./FileBrowser";
@@ -445,7 +445,18 @@ export default function App() {
         break;
       case "agent_end":
         setBusy(false);
-        setTurns((prev) => prev.map((t) => t.status === "streaming" ? { ...t, status: "done" } : t));
+        setTurns((prev) => {
+          // 先把所有 streaming 标记为 done
+          let next = prev.map((t) => t.status === "streaming" ? { ...t, status: "done" as const } : t);
+          // 过滤 Pi 自发输出的教程欢迎语（无 user 消息 + 命中教程签名）。
+          // 实时流也过滤，避免用户看到"欢迎来到 Pi 的教程之旅"等无关输出。
+          next = next.filter((t) => {
+            if (t.userMessage.trim()) return true;
+            const assistantText = t.assistantMsgs.map((m) => m.text).join("");
+            return !isTutorialWelcome(t.userMessage, assistantText);
+          });
+          return next;
+        });
         if (rafRef.current != null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; flushText(); }
         currentTurnId.current = null; currentMsgId.current = null;
         // agent_end 后刷新状态 & 统计 & 自动命名 & 刷新会话列表

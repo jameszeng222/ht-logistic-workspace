@@ -3,11 +3,25 @@
 
 import type { Turn, AssistantMsg, ToolCall } from "./types";
 
-// Pi 在新建会话时会自发输出一段 "Welcome to Pi ... interactive tutorial" 教程欢迎语，
-// 这不是用户发起的对话，且与物流工作台场景无关，这里统一过滤掉。
-// 特征：无前置 user 消息 + 助手文本命中教程签名。
-const TUTORIAL_SIGNATURES = ["Welcome to Pi", "interactive tutorial"];
-function isTutorialWelcome(userMessage: string, assistantText: string): boolean {
+// Pi 在新建会话时会自发输出一段教程欢迎语（中英文皆有），这不是用户发起的对话，
+// 且与物流工作台场景无关，这里统一过滤掉。
+// 特征：无前置 user 消息 + 助手文本命中教程签名（中英文）。
+const TUTORIAL_SIGNATURES = [
+  // 英文签名
+  "Welcome to Pi",
+  "interactive tutorial",
+  "agentic coding environment",
+  // 中文签名
+  "欢迎来到 Pi",
+  "欢迎来到Pi",
+  "教程之旅",
+  "我是 Pi",
+  "我是Pi",
+  "你的 AI 编程搭档",
+  "AI 编程搭档",
+  "协作方式",
+];
+export function isTutorialWelcome(userMessage: string, assistantText: string): boolean {
   if (userMessage.trim()) return false;
   return TUTORIAL_SIGNATURES.some((s) => assistantText.includes(s));
 }
