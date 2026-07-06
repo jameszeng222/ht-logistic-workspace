@@ -1238,6 +1238,43 @@ fn resolve_sidecar(resource_dir: Option<&std::path::Path>) -> Result<(Command, s
     Err("未找到 python-sidecar。请先构建 PyInstaller exe，或在开发模式下从仓库根启动。".into())
 }
 
+/// 发 HTTP GET /api/health 验证 sidecar 是否真的在运行。
+///
+/// 仅 TCP 连通不够——端口可能被其它服务占用（如残留的 dev server），
+/// 那种情况下工具 fetch 会打到错误服务。必须验证 HTTP 响应内容。
+///
+/// 用 std::net 手动发 HTTP 请求，避免引入 reqwest 依赖。
+fn check_sidecar_health() -> bool {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let addr = format!("127.0.0.1:{SIDECAR_PORT}");
+    let socket_addr: std::net::SocketAddr = match addr.parse() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    let mut stream = match TcpStream::connect_timeout(&socket_addr, Duration::from_secs(2)) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    // 读写都设超时，避免卡死
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+
+    let req = b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    if stream.write_all(req).is_err() {
+        return false;
+    }
+    let mut buf = String::new();
+    if stream.read_to_string(&mut buf).is_err() {
+        return false;
+    }
+    // sidecar /api/health 返回 {"ok":true}，检查 body 是否包含 "ok"
+    // （不严格匹配 JSON，容错 sidecar 未来字段扩展）
+    buf.contains("\"ok\"") && buf.contains("true")
+}
+
 /// 启动 Python sidecar。setup 时调用；不阻塞事件循环，后台线程轮询健康。
 fn spawn_sidecar(app: &AppHandle) {
     let state = app.state::<SidecarState>();
@@ -1245,11 +1282,12 @@ fn spawn_sidecar(app: &AppHandle) {
         return; // 已启动
     }
 
-    // 端口已占用检测：如果 127.0.0.1:8000 已经能连上，说明用户手动起了 sidecar
-    // （或上次未清理），直接标记为就绪，不再拉起新进程，避免端口冲突。
-    let addr = format!("127.0.0.1:{SIDECAR_PORT}");
-    if std::net::TcpStream::connect(&addr).is_ok() {
-        eprintln!("[sidecar] 端口 {} 已被占用，认定外部 sidecar 已就绪", SIDECAR_PORT);
+    // 端口已占用检测：如果 127.0.0.1:8000 已经有服务响应 /api/health，
+    // 说明用户手动起了 sidecar（或上次未清理），直接标记为就绪，不再拉起新进程。
+    // 注意：必须发 HTTP 请求验证响应内容，仅 TCP 连通不够——端口可能被其它服务
+    // （如残留的 dev server、其它应用）占用，那种情况下工具 fetch 会打到错误服务。
+    if check_sidecar_health() {
+        eprintln!("[sidecar] 端口 {} 已有 sidecar 响应，认定外部 sidecar 已就绪", SIDECAR_PORT);
         state.ready.store(true, Ordering::SeqCst);
         let _ = app.emit("sidecar-status", serde_json::json!({
             "ready": true, "url": SIDECAR_URL, "note": "外部 sidecar"
@@ -1294,13 +1332,12 @@ fn spawn_sidecar(app: &AppHandle) {
         }
     }
 
-    // 后台线程轮询端口：连上 127.0.0.1:8000 即认为就绪，emit sidecar-status。
-    // 用 TcpStream 而非 HTTP 客户端，避免引入 reqwest 依赖；端口能连上 = uvicorn 已起。
+    // 后台线程轮询 /api/health：HTTP 响应 {"ok":true} 才认为就绪。
+    // 不用纯 TCP 连通——端口可能被其它服务占用，那种情况下工具 fetch 会失败。
     let app2 = app.clone();
     std::thread::spawn(move || {
-        let addr = format!("127.0.0.1:{SIDECAR_PORT}");
         for _ in 0..30 { // 最多等 ~15s（30 × 500ms）
-            if std::net::TcpStream::connect(&addr).is_ok() {
+            if check_sidecar_health() {
                 if let Some(state) = app2.try_state::<SidecarState>() {
                     state.ready.store(true, Ordering::SeqCst);
                 }
@@ -1310,7 +1347,7 @@ fn spawn_sidecar(app: &AppHandle) {
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
         let _ = app2.emit("sidecar-status", serde_json::json!({
-            "ready": false, "error": "sidecar 启动后 15s 内未监听端口",
+            "ready": false, "error": "sidecar 启动后 15s 内 /api/health 未就绪",
         }));
     });
 }
