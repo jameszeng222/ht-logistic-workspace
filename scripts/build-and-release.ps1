@@ -135,6 +135,13 @@ if ($SkipVersionBump) {
         exit 1
     }
     Write-OK "Version updated: $newVersion"
+
+    # Commit the version bump so repo version stays in sync with built/released version.
+    # Without this, local tauri.conf.json has the new version but remote doesn't,
+    # causing "版本对不上" confusion on next pull/build.
+    & cmd /c "git add tauri-app/src-tauri/tauri.conf.json 2>&1" | Out-Null
+    & cmd /c "git -c user.name='trae-agent' -c user.email='agent@trae.local' commit -m `"chore: bump version to $newVersion`" 2>&1" | Out-Null
+    Write-OK "Version bump committed locally (not pushed — will push after build succeeds)"
 }
 
 # ========== 2. Set signing env vars ==========
@@ -309,6 +316,24 @@ if ($openFolder -ne 'n') {
 $openGitHub = Read-Host "Open GitHub Release create page? (Y/n)"
 if ($openGitHub -ne 'n') {
     Start-Process "https://github.com/jameszeng222/ht-logistic-workspace/releases/new"
+}
+
+# 5c. Push version bump commit to remote (so repo version stays in sync).
+#     Ask before pushing — user may want to verify build first.
+if (-not $SkipVersionBump) {
+    $doPush = Read-Host "Push version bump commit to remote? (y/N)"
+    if ($doPush -eq 'y') {
+        Write-Host "Pushing version bump commit..." -ForegroundColor Gray
+        & cmd /c "git push origin main 2>&1" | Out-String | Write-Host
+        if ($LASTEXITCODE -eq 0) {
+            Write-OK "Version bump pushed. Repo now in sync with released v$newVersion."
+        } else {
+            Write-Warn "Push failed (exit $LASTEXITCODE). Push manually after upload: git push origin main"
+        }
+    } else {
+        Write-Host "  Skipped push. Remember to push manually:" -ForegroundColor Yellow
+        Write-Host "    git push origin main" -ForegroundColor Gray
+    }
 }
 
 Write-Host ""
