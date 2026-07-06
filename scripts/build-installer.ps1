@@ -416,9 +416,12 @@ $appVersion = $tauriConf.version
 
 # GitHub Release asset URL pattern: releases/latest/download/<filename>
 # The tag is set by the user when creating the release; the "latest" alias resolves to the most recent.
+# IMPORTANT: filename contains spaces (e.g. "HT Logistic Agent_0.1.3_x64-setup.exe"),
+# must URL-encode it to %20 or GitHub returns 404 on the download URL.
 $repoOwner = "jameszeng222"
 $repoName = "ht-logistic-workspace"
-$setupUrl = "https://github.com/$repoOwner/$repoName/releases/latest/download/$($setupExe.Name)"
+$encodedName = [uri]::EscapeDataString($setupExe.Name)
+$setupUrl = "https://github.com/$repoOwner/$repoName/releases/latest/download/$encodedName"
 
 # Read signature content (single-line base64 + header)
 $signature = ""
