@@ -80,8 +80,9 @@ $currentVersion = $tauriConf.version
 Write-OK "Current version: $currentVersion"
 
 # 0d. Check git status
-$gitStatus = git status --porcelain 2>&1
-if ($gitStatus) {
+#     Use cmd /c to avoid PowerShell NativeCommandError on git's stderr output
+$gitStatus = (& cmd /c "git status --porcelain 2>&1") | Out-String
+if ($gitStatus.Trim()) {
     Write-Warn "Git has uncommitted changes:"
     Write-Host $gitStatus
     $continue = Read-Host "  Continue? (y/N)"
@@ -89,10 +90,13 @@ if ($gitStatus) {
 }
 
 # 0e. Check remote sync
+#     Git writes progress/info to stderr (not stdout), which PowerShell treats
+#     as a native command error under $ErrorActionPreference="Stop". Wrap git
+#     calls with 2>&1 and capture output, or use cmd /c to avoid the issue.
 Write-Host "  Checking remote sync..."
-git fetch origin main 2>&1 | Out-Null
-$localCommit = git rev-parse HEAD 2>&1
-$remoteCommit = git rev-parse origin/main 2>&1
+$fetchOutput = & cmd /c "git fetch origin main 2>&1" | Out-String
+$localCommit = (& cmd /c "git rev-parse HEAD 2>&1").Trim()
+$remoteCommit = (& cmd /c "git rev-parse origin/main 2>&1").Trim()
 if ($localCommit -ne $remoteCommit) {
     Write-Warn "Local and remote differ, recommend: git pull origin main"
     Write-Host "  Local:  $localCommit"
