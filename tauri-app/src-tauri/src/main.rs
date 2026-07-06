@@ -43,7 +43,11 @@ const SIDECAR_URL: &str = "http://127.0.0.1:8000";
 const SIDECAR_PORT: u16 = 8000;
 
 /// 查找 pi（PATH + npm 全局目录）
-fn find_pi() -> Option<std::path::PathBuf> {
+///
+/// `resource_dir`：Tauri 的 resource_dir()，打包模式下传入；开发模式可传 None。
+/// 优先查 resource_dir/pi-runtime/，因为 tauri.conf.json 里 `"./pi-runtime/"`
+/// 会把 pi-runtime 打到 resource 根目录下的 pi-runtime/ 子目录。
+fn find_pi(resource_dir: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
     use std::path::PathBuf;
     let candidates: Vec<&str> = if cfg!(windows) {
         vec!["pi.cmd", "pi.exe", "pi.bat", "pi"]
@@ -55,8 +59,19 @@ fn find_pi() -> Option<std::path::PathBuf> {
     //    打包时把便携版 node + pi 包放在 resource_dir/pi-runtime/ 下，
     //    pi-runtime/pi.cmd (Windows) 或 pi-runtime/pi (macOS/Linux) 是启动脚本，
     //    内部调用 pi-runtime/node.exe 运行 pi-runtime/node_modules/@earendil-works/pi-coding-agent。
-    //    用 current_exe 向上查找 + resource_dir 查找两路定位。
+    //
+    //    查找顺序（先命中先用）：
+    //      a. resource_dir/pi-runtime（Tauri v2 NSIS 安装后资源通常在 exe 同级或 resources/ 子目录，
+    //         app.path().resource_dir() 已抽象掉这个差异，是最权威的打包资源入口）
+    //      b. current_exe 向上 6 级找 pi-runtime（兼容 resources 不在 exe 同目录、
+    //         或开发模式下 exe 在 target/debug/ 而 pi-runtime 在仓库根的情况）
+    //      c. 当前工作目录及父目录（开发模式兜底）
     let mut runtime_candidates: Vec<PathBuf> = Vec::new();
+    // 1a. resource_dir/pi-runtime（打包模式首选）
+    if let Some(rd) = resource_dir {
+        runtime_candidates.push(rd.join("pi-runtime"));
+    }
+    // 1b. current_exe 向上查找
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             let mut cur: Option<&std::path::Path> = Some(exe_dir);
@@ -68,7 +83,7 @@ fn find_pi() -> Option<std::path::PathBuf> {
             }
         }
     }
-    // 开发模式：从 CARGO_MANIFEST_DIR 或当前工作目录向上找
+    // 1c. 开发模式：从当前工作目录向上找
     if let Ok(cwd) = std::env::current_dir() {
         runtime_candidates.push(cwd.join("pi-runtime"));
         if let Some(parent) = cwd.parent() {
@@ -319,7 +334,10 @@ fn spawn_pi(
     if state.child.lock().unwrap().is_some() {
         return Ok(());
     }
-    let pi_path = find_pi().ok_or_else(|| {
+    // 获取 Tauri resource_dir 用于查找打包内嵌的 pi-runtime。
+    // 打包模式下 resource_dir/pi-runtime/pi.cmd 是傻瓜包的 Pi 启动脚本。
+    let resource_dir = app.path().resource_dir().ok();
+    let pi_path = find_pi(resource_dir.as_deref()).ok_or_else(|| {
         let path_var = std::env::var("PATH").unwrap_or_default();
         format!("未找到 pi。PATH={path_var}\n请确认已 npm i -g @earendil-works/pi-coding-agent")
     })?;
@@ -1098,19 +1116,59 @@ async fn stop_pi(state: State<'_, PiState>) -> Result<(), String> {
 /// 定位 Python sidecar 的工作目录与启动方式。
 ///
 /// 解析顺序（先命中先用）：
-///   1. 打包后 resource_dir 下的 `python-sidecar/ht-sidecar[.exe]`（PyInstaller 单文件）
+///   1. 打包后 resource_dir 下的 ht-sidecar[.exe]（两种打包位置都支持）：
+///      a. resource_dir/ht-sidecar[.exe]（tauri.conf.json `"./"` 配置时的实际位置）
+///      b. resource_dir/python-sidecar/ht-sidecar[.exe]（兼容 `"./python-sidecar/"` 配置）
 ///   2. 开发模式：仓库根的 `python-sidecar/` 目录 + 系统 python
 /// 两者都失败返回 Err，调用方据此降级（前端提示用户手动启动 sidecar）。
 fn resolve_sidecar(resource_dir: Option<&std::path::Path>) -> Result<(Command, std::path::PathBuf), String> {
-    // 1. 打包后：resource_dir/python-sidecar/ht-sidecar(.exe)
+    let exe_name = if cfg!(windows) { "ht-sidecar.exe" } else { "ht-sidecar" };
+
+    // 1. 打包后：在 resource_dir 下查找 ht-sidecar exe
     if let Some(rd) = resource_dir {
+        // 1a. resource 根目录（当前 tauri.conf.json "../../python-sidecar/ht-sidecar*": "./" 的实际位置）
+        let exe_root = rd.join(exe_name);
+        if exe_root.is_file() {
+            let mut cmd = Command::new(&exe_root);
+            // 工作目录设为 resource_dir：PyInstaller onefile exe 的依赖在 _MEIPASS 临时目录，
+            // cwd 主要影响 main.py 里可能的相对路径读取（如 tools/templates/）。
+            // 打包后 templates 已在 _MEIPASS 内，cwd 影响不大，但保持与原 python-sidecar/ 一致
+            // 的语义，设为 exe 所在目录。
+            cmd.current_dir(rd);
+            eprintln!("[sidecar] 使用打包 exe: {} (cwd: {})", exe_root.display(), rd.display());
+            return Ok((cmd, rd.to_path_buf()));
+        }
+        // 1b. resource/python-sidecar/ 子目录（兼容旧配置或显式打到子目录的情况）
         let ps_dir = rd.join("python-sidecar");
-        let exe_name = if cfg!(windows) { "ht-sidecar.exe" } else { "ht-sidecar" };
-        let exe = ps_dir.join(exe_name);
-        if exe.is_file() {
-            let mut cmd = Command::new(&exe);
+        let exe_sub = ps_dir.join(exe_name);
+        if exe_sub.is_file() {
+            let mut cmd = Command::new(&exe_sub);
             cmd.current_dir(&ps_dir);
+            eprintln!("[sidecar] 使用打包 exe: {} (cwd: {})", exe_sub.display(), ps_dir.display());
             return Ok((cmd, ps_dir));
+        }
+    }
+
+    // 1c. 兜底：current_exe 同级直接查 ht-sidecar exe
+    //     NSIS perMachine 安装时资源就在 exe 同目录（如 D:\Program Files\HT Logistic Agent\），
+    //     但某些 Tauri 版本/配置下 resource_dir() 可能返回意外路径（如 resources/ 子目录），
+    //     此时 current_exe 同级是最可靠的定位方式。
+    //     向上查 4 级覆盖 exe 在 bin/ 子目录的少数情况。
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let mut cur: Option<&std::path::Path> = Some(exe_dir);
+            for _ in 0..4 {
+                if let Some(d) = cur {
+                    let exe_local = d.join(exe_name);
+                    if exe_local.is_file() {
+                        let mut cmd = Command::new(&exe_local);
+                        cmd.current_dir(d);
+                        eprintln!("[sidecar] 使用打包 exe (current_exe 兜底): {} (cwd: {})", exe_local.display(), d.display());
+                        return Ok((cmd, d.to_path_buf()));
+                    }
+                    cur = d.parent();
+                } else { break; }
+            }
         }
     }
 
