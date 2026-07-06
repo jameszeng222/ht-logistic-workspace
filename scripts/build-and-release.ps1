@@ -297,13 +297,99 @@ foreach ($f in $filesToUpload) {
 
 Write-Host ""
 Write-Host "GitHub Release steps:" -ForegroundColor Cyan
+Write-Host "  Option A: Auto-create release via gh CLI (if installed & authenticated)"
+Write-Host "  Option B: Manual upload via browser"
+Write-Host ""
+
+# 5a. Try auto-create release via gh CLI
+$ghAvailable = $false
+try {
+    $ghVersion = (& cmd /c "gh --version 2>&1") | Out-String
+    if ($LASTEXITCODE -eq 0 -and $ghVersion -match "gh version") {
+        $ghAvailable = $true
+    }
+} catch {}
+
+if ($ghAvailable) {
+    # Check if authenticated
+    $authStatus = (& cmd /c "gh auth status 2>&1") | Out-String
+    if ($authStatus -match "Logged in to github.com") {
+        Write-OK "gh CLI authenticated"
+        $autoRelease = Read-Host "Create GitHub Release v$newVersion and upload 3 files automatically? (Y/n)"
+        if ($autoRelease -ne 'n') {
+            Write-Step "Creating GitHub Release v$newVersion..."
+
+            $setupExePath = $filesToUpload | Where-Object { $_.Desc -eq "Installer" } | Select-Object -ExpandProperty Path
+            $sigPath = $filesToUpload | Where-Object { $_.Desc -eq "Signature" } | Select-Object -ExpandProperty Path
+            $jsonPath = $filesToUpload | Where-Object { $_.Desc -eq "Updater manifest" } | Select-Object -ExpandProperty Path
+
+            # Check if release already exists, delete if so (to allow re-upload)
+            $existingRelease = (& cmd /c "gh release view v$newVersion 2>&1") | Out-String
+            if ($LASTEXITCODE -eq 0) {
+                Write-Warn "Release v$newVersion already exists. Deleting and recreating..."
+                & cmd /c "gh release delete v$newVersion --yes 2>&1" | Out-Null
+            }
+
+            # Create release with all 3 files attached
+            $releaseNotes = "HT Logistic Agent v$newVersion`n`nAutomated build from commit $(git rev-parse --short HEAD)."
+            $result = (& cmd /c "gh release create v$newVersion `"$setupExePath`" `"$sigPath`" `"$jsonPath`" --title `"HT Logistic Agent v$newVersion`" --notes `"$releaseNotes`" 2>&1") | Out-String
+
+            if ($LASTEXITCODE -eq 0) {
+                Write-OK "Release v$newVersion created and 3 files uploaded!"
+                Write-Host "  $result" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "Client 'Check for updates' will now get v$newVersion." -ForegroundColor Green
+
+                # Push version bump commit (since release is published)
+                if (-not $SkipVersionBump) {
+                    Write-Host "Pushing version bump commit..." -ForegroundColor Gray
+                    & cmd /c "git push origin main 2>&1" | Out-String | Write-Host
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-OK "Version bump pushed. Repo in sync with released v$newVersion."
+                    }
+                }
+
+                # Open bundle folder for reference
+                $openFolder = Read-Host "Open bundle folder in explorer? (y/N)"
+                if ($openFolder -eq 'y') {
+                    Start-Process explorer.exe -ArgumentList $bundleDir
+                }
+
+                Write-Host ""
+                Write-Host "================================================" -ForegroundColor Green
+                Write-Host "  All done! Release v$newVersion is live." -ForegroundColor Green
+                Write-Host "================================================" -ForegroundColor Green
+                exit 0
+            } else {
+                Write-Err "gh release create failed:"
+                Write-Host $result -ForegroundColor Red
+                Write-Host "Falling back to manual upload." -ForegroundColor Yellow
+            }
+        }
+    } else {
+        Write-Warn "gh CLI installed but not authenticated. Run: gh auth login"
+    }
+} else {
+    Write-Host "  (gh CLI not installed, skipping auto-release)" -ForegroundColor Gray
+}
+
+# Fallback: manual upload via browser
+Write-Host ""
+Write-Host "Manual upload required. Files to upload:" -ForegroundColor Cyan
+foreach ($f in $filesToUpload) {
+    if (Test-Path $f.Path) {
+        $size = [math]::Round((Get-Item $f.Path).Length / 1MB, 2)
+        Write-Host "  [$($f.Desc)] $f.Path ($size MB)" -ForegroundColor White
+    } else {
+        Write-Host "  [$($f.Desc)] $f.Path  (MISSING!)" -ForegroundColor Red
+    }
+}
+Write-Host ""
 Write-Host "  1. Open: https://github.com/jameszeng222/ht-logistic-workspace/releases/new" -ForegroundColor Gray
 Write-Host "  2. Tag: v$newVersion  (must match version)" -ForegroundColor Gray
 Write-Host "  3. Title: HT Logistic Agent v$newVersion" -ForegroundColor Gray
 Write-Host "  4. Upload the 3 files above" -ForegroundColor Gray
 Write-Host "  5. Publish release" -ForegroundColor Gray
-Write-Host ""
-Write-Host "After publish, client 'Check for updates' will get the new version." -ForegroundColor Green
 Write-Host ""
 
 # 5a. Auto open bundle folder
