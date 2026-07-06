@@ -215,15 +215,20 @@ Get-ChildItem (Join-Path $piRuntimeDir "node_modules\@types") -Directory -ErrorA
 $runtimeSize = [math]::Round((Get-ChildItem $piRuntimeDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
 Write-Host "  pi-runtime ready (about ${runtimeSize} MB after cleanup)" -ForegroundColor Green
 
-# 2e. Copy pi-runtime to a short path (C:\ht-build\) to avoid NSIS MAX_PATH
-#     errors. Even after cleanup, some .js files from @mistralai/@aws-sdk have
-#     paths >260 chars under the repo dir. NSIS makensis uses ANSI Win32 APIs
-#     that hard-fail on long paths regardless of LongPathsEnabled registry setting.
-$shortBuildRoot = "C:\ht-build"
-$shortPiRuntimeDir = Join-Path $shortBuildRoot "pi-runtime"
-Write-Host "  Copying pi-runtime to short path ($shortPiRuntimeDir)..." -ForegroundColor Gray
-if (Test-Path $shortBuildRoot) { Remove-Item $shortBuildRoot -Recurse -Force }
-New-Item -ItemType Directory -Path $shortBuildRoot -Force | Out-Null
+# 2e. Copy pi-runtime to a relative path under src-tauri/ so tauri.conf.json
+#     can reference it with a relative path. Tauri v2 resources config does NOT
+#     support Windows absolute paths like "C:/ht-build/pi-runtime/" — it strips
+#     the drive letter (treating "C:" as a Unix path prefix), leaving
+#     "/ht-build/pi-runtime/" which resolves to the current drive's root and
+#     fails with "resource path doesn't exist" when cwd is on a different drive.
+#     Using "pi-runtime/" (relative to src-tauri/) avoids this entirely.
+#     NSIS MAX_PATH risk is mitigated by the junk file cleanup in step 2d
+#     (removing .d.ts/.map/.ts files that caused >260 char paths).
+$tauriSrcDir = Join-Path $tauriDir "src-tauri"
+$shortPiRuntimeDir = Join-Path $tauriSrcDir "pi-runtime"
+Write-Host "  Copying pi-runtime to src-tauri relative path ($shortPiRuntimeDir)..." -ForegroundColor Gray
+if (Test-Path $shortPiRuntimeDir) { Remove-Item $shortPiRuntimeDir -Recurse -Force }
+New-Item -ItemType Directory -Path $shortPiRuntimeDir -Force | Out-Null
 # robocopy handles long paths better than Copy-Item; /MIR mirrors, /NFL /NDL no file/dir listing
 # robocopy exit codes: 0-7 are success, 8+ are errors. Pipe to Out-Null to suppress default output.
 robocopy $piRuntimeDir $shortPiRuntimeDir /MIR /NFL /NDL /NJH /NJS | Out-Null
@@ -232,7 +237,7 @@ robocopy $piRuntimeDir $shortPiRuntimeDir /MIR /NFL /NDL /NJH /NJS | Out-Null
 # fail with the cryptic "resource path doesn't exist" error.
 $piLauncherInShort = Join-Path $shortPiRuntimeDir "pi.cmd"
 if (-not (Test-Path $piLauncherInShort)) {
-    Write-Host "  [ERROR] robocopy failed to copy pi-runtime to short path" -ForegroundColor Red
+    Write-Host "  [ERROR] robocopy failed to copy pi-runtime to src-tauri" -ForegroundColor Red
     Write-Host "  Source: $piRuntimeDir" -ForegroundColor Gray
     Write-Host "  Target: $shortPiRuntimeDir" -ForegroundColor Gray
     Write-Host "  Source exists: $(Test-Path $piRuntimeDir)" -ForegroundColor Gray
@@ -244,7 +249,8 @@ if (-not (Test-Path $piLauncherInShort)) {
     throw "robocopy failed: pi.cmd not found in $shortPiRuntimeDir after copy. See diagnostics above."
 }
 Test-PiLauncher -RuntimeDir $shortPiRuntimeDir
-Write-Host "  short-path pi-runtime validated ($shortPiRuntimeDir)" -ForegroundColor Gray
+Write-Host "  src-tauri pi-runtime validated ($shortPiRuntimeDir)" -ForegroundColor Gray
+$piRuntimeForTauriConf = "pi-runtime/"
 
 # ---------- 3. Clean sidecar temp + build Tauri installer ----------
 Write-Host ""
@@ -297,9 +303,11 @@ finally {
     Pop-Location
 }
 
-# 3b. Clean up short-path build dir (C:\ht-build) — no longer needed after NSIS packaging
-if (Test-Path $shortBuildRoot) {
-    Remove-Item $shortBuildRoot -Recurse -Force -ErrorAction SilentlyContinue
+# 3b. Clean up src-tauri/pi-runtime — it's now embedded in the NSIS installer,
+#     no longer needed on disk. Removing it keeps the repo clean and avoids
+#     accidental commits of this large directory.
+if (Test-Path $shortPiRuntimeDir) {
+    Remove-Item $shortPiRuntimeDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # ---------- 4. Generate latest.json + print upload checklist ----------

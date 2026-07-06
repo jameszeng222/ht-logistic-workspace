@@ -31,7 +31,7 @@
     "externalBin": [],
     "resources": {
       "../../python-sidecar/ht-sidecar*": "./",
-      "C:\\ht-build\\pi-runtime\\": "./pi-runtime/"
+      "pi-runtime/": "./pi-runtime/"
     },
     "icon": [
       "icons/32x32.png",
