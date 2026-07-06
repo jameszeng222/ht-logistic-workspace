@@ -231,22 +231,35 @@ $unusedPackages = @(
     "@mistralai"           # Mistral AI SDK - not used (project uses Claude), worst path-length offender
 )
 foreach ($pkg in $unusedPackages) {
-    $p = Join-Path $piRuntimeDir "node_modules\$pkg"
-    if (Test-Path $p) {
-        $size = [math]::Round((Get-ChildItem $p -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
+    # Search recursively for ALL instances of the package, including nested
+    # node_modules (e.g. @earendil-works/pi-coding-agent/node_modules/@mistralai).
+    # Get-ChildItem -Recurse -Directory with -Filter handles long paths on read.
+    $found = Get-ChildItem $piRuntimeDir -Recurse -Directory -Filter $pkg -ErrorAction SilentlyContinue
+    foreach ($p in $found) {
+        $size = [math]::Round((Get-ChildItem $p.FullName -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
         # Use robocopy mirror trick for long-path safety (Remove-Item fails on >260 chars
         # which is exactly the case for @mistralai's deeply nested files)
         $emptyTemp = Join-Path $env:TEMP "ht-empty-dir-for-mirror"
         New-Item -ItemType Directory -Path $emptyTemp -Force | Out-Null
-        robocopy $emptyTemp $p /MIR /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
-        Remove-Item $p -Force -ErrorAction SilentlyContinue
+        robocopy $emptyTemp $p.FullName /MIR /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
+        Remove-Item $p.FullName -Force -ErrorAction SilentlyContinue
         Remove-Item $emptyTemp -Force -ErrorAction SilentlyContinue
-        Write-Host "  removed unused package: $pkg (${size} MB)" -ForegroundColor Gray
+        Write-Host "  removed unused package: $($p.FullName) (${size} MB)" -ForegroundColor Gray
     }
 }
 
 $runtimeSize = [math]::Round((Get-ChildItem $piRuntimeDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
 Write-Host "  pi-runtime ready (about ${runtimeSize} MB after cleanup)" -ForegroundColor Green
+
+# Verify @mistralai is fully removed (would cause NSIS MAX_PATH failure if present)
+$leftoverMistralai = Get-ChildItem $piRuntimeDir -Recurse -Directory -Filter "@mistralai" -ErrorAction SilentlyContinue
+if ($leftoverMistralai) {
+    Write-Host "  [WARN] @mistralai still present at:" -ForegroundColor Yellow
+    $leftoverMistralai | ForEach-Object { Write-Host "    $($_.FullName)" -ForegroundColor Gray }
+    Write-Host "  NSIS will likely fail with MAX_PATH error." -ForegroundColor Yellow
+} else {
+    Write-Host "  @mistralai fully removed (NSIS MAX_PATH safe)" -ForegroundColor Green
+}
 
 # 2e. Copy pi-runtime to src-tauri/pi-runtime/ for Tauri to pick up via
 #     relative path "pi-runtime/" in tauri.conf.json.
