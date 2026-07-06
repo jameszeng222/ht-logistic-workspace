@@ -217,90 +217,16 @@ foreach ($sub in $junkDirs) {
 Get-ChildItem (Join-Path $piRuntimeDir "node_modules\@types") -Directory -ErrorAction SilentlyContinue |
     ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
 
-# 2d-extra. Reduce pi-runtime path lengths to avoid NSIS MAX_PATH 260-char limit.
-#   pi-coding-agent bundles @mistralai/mistralai with deeply nested files like:
-#   esm/models/operations/getchatcompletionfieldoptionscountsv1observability...
-#   ...chatcompletionfieldsfieldnameoptionscountspost.js (95-char filename)
-#
-#   NSIS has a hard 260-char path limit (10-year-old unfixed bug, see NSIS patch #256).
-#   We MUST reduce path lengths. Strategy:
-#   1. Delete esm/ dirs (keep cjs/) — pi uses CommonJS, ESM is duplicate dead weight
-#   2. Delete docs/examples/tests dirs — non-runtime
-#   3. If still too long, delete @mistralai entirely and create stub
-#
-#   BUT: deleting @mistralai broke pi (MODULE_NOT_FOUND). So we try esm-only first.
-#   After cleanup, verify pi.cmd can actually start (node -e "require('@mistralai/mistralai')")
-#   before proceeding. If require fails, we know to find another solution.
-Write-Host "  removing esm/ dirs and docs to shorten paths (NSIS MAX_PATH)..." -ForegroundColor Gray
-
-# Remove esm/ directories recursively — pi-coding-agent uses CommonJS (cjs),
-# not ESM. esm/ dirs contain duplicate deep-nested files that trigger MAX_PATH.
-$esmRemoved = 0
-Get-ChildItem $piRuntimeDir -Recurse -Directory -Filter "esm" -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName -like "*\node_modules\*" } |
-    ForEach-Object {
-        try {
-            # Use robocopy mirror trick for long-path safety
-            $emptyTemp = Join-Path $env:TEMP "ht-empty-dir-for-mirror"
-            New-Item -ItemType Directory -Path $emptyTemp -Force | Out-Null
-            robocopy $emptyTemp $_.FullName /MIR /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
-            Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
-            Remove-Item $emptyTemp -Force -ErrorAction SilentlyContinue
-            $esmRemoved++
-        } catch {}
-    }
-Write-Host "  removed $esmRemoved esm/ directories" -ForegroundColor Gray
-
-# Remove docs/, examples/, __tests__/ dirs recursively (non-runtime, may have long paths)
-$junkSubdirs = @("docs","examples","__tests__","tests","test","coverage")
-foreach ($sub in $junkSubdirs) {
-    Get-ChildItem $piRuntimeDir -Recurse -Directory -Filter $sub -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -like "*\node_modules\*" } |
-        ForEach-Object {
-            try {
-                $emptyTemp = Join-Path $env:TEMP "ht-empty-dir-for-mirror"
-                New-Item -ItemType Directory -Path $emptyTemp -Force | Out-Null
-                robocopy $emptyTemp $_.FullName /MIR /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
-                Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
-                Remove-Item $emptyTemp -Force -ErrorAction SilentlyContinue
-            } catch {}
-        }
-}
-
-# Verify pi can still start after esm removal.
-# Test: node -e "require('@earendil-works/pi-coding-agent')" should not throw.
-$nodeExe = Join-Path $piRuntimeDir "node.exe"
-if (Test-Path $nodeExe) {
-    Write-Host "  verifying pi-coding-agent can still require after esm removal..." -ForegroundColor Gray
-    $testScript = "try { require('@earendil-works/pi-coding-agent'); console.log('OK'); } catch(e) { console.error('FAIL:', e.message); process.exit(1); }"
-    $testResult = & cmd /c "`"$nodeExe`" -e `"$testScript`" 2>&1" | Out-String
-    if ($testResult -match "OK") {
-        Write-Host "  pi-coding-agent require test passed" -ForegroundColor Green
-    } else {
-        Write-Host "  [WARN] pi-coding-agent require test failed:" -ForegroundColor Yellow
-        Write-Host $testResult -ForegroundColor Gray
-        Write-Host "  pi may not start. Check error above." -ForegroundColor Yellow
-    }
-}
-
 $runtimeSize = [math]::Round((Get-ChildItem $piRuntimeDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
 Write-Host "  pi-runtime ready (about ${runtimeSize} MB after cleanup)" -ForegroundColor Green
-
-# Verify @mistralai is fully removed (would cause NSIS MAX_PATH failure if present)
-$leftoverMistralai = Get-ChildItem $piRuntimeDir -Recurse -Directory -Filter "@mistralai" -ErrorAction SilentlyContinue
-if ($leftoverMistralai) {
-    Write-Host "  [WARN] @mistralai still present at:" -ForegroundColor Yellow
-    $leftoverMistralai | ForEach-Object { Write-Host "    $($_.FullName)" -ForegroundColor Gray }
-    Write-Host "  NSIS will likely fail with MAX_PATH error." -ForegroundColor Yellow
-} else {
-    Write-Host "  @mistralai fully removed (NSIS MAX_PATH safe)" -ForegroundColor Green
-}
 
 # 2e. Copy pi-runtime to src-tauri/pi-runtime/ for Tauri to pick up via
 #     relative path "pi-runtime/" in tauri.conf.json.
 #     Tauri v2 resources config doesn't support Windows absolute paths (strips
-#     drive letter), so we must use relative path. NSIS MAX_PATH risk is
-#     mitigated by step 2d-extra (removed @mistralai with 95-char filenames).
+#     drive letter), so we must use relative path.
+#     NOTE: NSIS MAX_PATH 260-char limit is NOT mitigated here. If pi-runtime
+#     contains paths >260 chars (e.g. @mistralai's deeply nested files),
+#     NSIS will fail. See 7z compression approach (TODO) for long-path solution.
 $tauriSrcDir = Join-Path $tauriDir "src-tauri"
 $repoPiRuntimeDir = Join-Path $tauriSrcDir "pi-runtime"
 
