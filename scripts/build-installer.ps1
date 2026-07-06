@@ -212,45 +212,77 @@ foreach ($sub in $junkDirs) {
 Get-ChildItem (Join-Path $piRuntimeDir "node_modules\@types") -Directory -ErrorAction SilentlyContinue |
     ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
 
+# 2d-extra. Remove unused large dependencies to avoid NSIS MAX_PATH errors.
+#   pi-coding-agent bundles many AI provider SDKs (mistralai, aws-sdk, etc.)
+#   with deeply nested file paths. Our project only uses Claude (via Anthropic SDK),
+#   so we can safely delete these unused provider SDKs.
+#   File paths like @mistralai/mistralai/esm/models/operations/getchat...post.js
+#   (95-char filename) cause NSIS to fail with MAX_PATH 260 limit.
+#
+#   NOTE: We only remove @mistralai (the worst offender with 95-char filenames).
+#   Other SDKs (@aws-sdk etc.) have shorter paths and don't trigger NSIS limit,
+#   so we keep them to avoid breaking pi-coding-agent's module resolution.
+$unusedPackages = @(
+    "@mistralai"           # Mistral AI SDK - not used (project uses Claude), worst path-length offender
+)
+foreach ($pkg in $unusedPackages) {
+    $p = Join-Path $piRuntimeDir "node_modules\$pkg"
+    if (Test-Path $p) {
+        $size = [math]::Round((Get-ChildItem $p -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
+        Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "  removed unused package: $pkg (${size} MB)" -ForegroundColor Gray
+    }
+}
+
 $runtimeSize = [math]::Round((Get-ChildItem $piRuntimeDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
 Write-Host "  pi-runtime ready (about ${runtimeSize} MB after cleanup)" -ForegroundColor Green
 
-# 2e. Copy pi-runtime to a relative path under src-tauri/ so tauri.conf.json
-#     can reference it with a relative path. Tauri v2 resources config does NOT
-#     support Windows absolute paths like "C:/ht-build/pi-runtime/" — it strips
-#     the drive letter (treating "C:" as a Unix path prefix), leaving
-#     "/ht-build/pi-runtime/" which resolves to the current drive's root and
-#     fails with "resource path doesn't exist" when cwd is on a different drive.
-#     Using "pi-runtime/" (relative to src-tauri/) avoids this entirely.
-#     NSIS MAX_PATH risk is mitigated by the junk file cleanup in step 2d
-#     (removing .d.ts/.map/.ts files that caused >260 char paths).
+# 2e. Copy pi-runtime to src-tauri/pi-runtime/ for Tauri to pick up via
+#     relative path "pi-runtime/" in tauri.conf.json.
+#     Tauri v2 resources config doesn't support Windows absolute paths (strips
+#     drive letter), so we must use relative path. NSIS MAX_PATH risk is
+#     mitigated by step 2d-extra (removed @mistralai with 95-char filenames).
 $tauriSrcDir = Join-Path $tauriDir "src-tauri"
-$shortPiRuntimeDir = Join-Path $tauriSrcDir "pi-runtime"
-Write-Host "  Copying pi-runtime to src-tauri relative path ($shortPiRuntimeDir)..." -ForegroundColor Gray
-if (Test-Path $shortPiRuntimeDir) { Remove-Item $shortPiRuntimeDir -Recurse -Force }
-New-Item -ItemType Directory -Path $shortPiRuntimeDir -Force | Out-Null
+$repoPiRuntimeDir = Join-Path $tauriSrcDir "pi-runtime"
+
+Write-Host "  Copying pi-runtime to src-tauri ($repoPiRuntimeDir)..." -ForegroundColor Gray
+if (Test-Path $repoPiRuntimeDir) { Remove-Item $repoPiRuntimeDir -Recurse -Force }
+New-Item -ItemType Directory -Path $repoPiRuntimeDir -Force | Out-Null
 # robocopy handles long paths better than Copy-Item; /MIR mirrors, /NFL /NDL no file/dir listing
-# robocopy exit codes: 0-7 are success, 8+ are errors. Pipe to Out-Null to suppress default output.
-robocopy $piRuntimeDir $shortPiRuntimeDir /MIR /NFL /NDL /NJH /NJS | Out-Null
+robocopy $piRuntimeDir $repoPiRuntimeDir /MIR /NFL /NDL /NJH /NJS | Out-Null
 # Verify the copy actually succeeded — robocopy can silently fail (e.g. source missing,
-# permission denied) and leave $shortPiRuntimeDir empty, which then makes tauri build
+# permission denied) and leave $repoPiRuntimeDir empty, which then makes tauri build
 # fail with the cryptic "resource path doesn't exist" error.
-$piLauncherInShort = Join-Path $shortPiRuntimeDir "pi.cmd"
-if (-not (Test-Path $piLauncherInShort)) {
+$piLauncherInRepo = Join-Path $repoPiRuntimeDir "pi.cmd"
+if (-not (Test-Path $piLauncherInRepo)) {
     Write-Host "  [ERROR] robocopy failed to copy pi-runtime to src-tauri" -ForegroundColor Red
     Write-Host "  Source: $piRuntimeDir" -ForegroundColor Gray
-    Write-Host "  Target: $shortPiRuntimeDir" -ForegroundColor Gray
+    Write-Host "  Target: $repoPiRuntimeDir" -ForegroundColor Gray
     Write-Host "  Source exists: $(Test-Path $piRuntimeDir)" -ForegroundColor Gray
-    Write-Host "  Target exists: $(Test-Path $shortPiRuntimeDir)" -ForegroundColor Gray
+    Write-Host "  Target exists: $(Test-Path $repoPiRuntimeDir)" -ForegroundColor Gray
     if (Test-Path $piRuntimeDir) {
         Write-Host "  Source contents (first 10):" -ForegroundColor Gray
         Get-ChildItem $piRuntimeDir -ErrorAction SilentlyContinue | Select-Object -First 10 | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
     }
-    throw "robocopy failed: pi.cmd not found in $shortPiRuntimeDir after copy. See diagnostics above."
+    throw "robocopy failed: pi.cmd not found in $repoPiRuntimeDir after copy. See diagnostics above."
 }
-Test-PiLauncher -RuntimeDir $shortPiRuntimeDir
-Write-Host "  src-tauri pi-runtime validated ($shortPiRuntimeDir)" -ForegroundColor Gray
-$piRuntimeForTauriConf = "pi-runtime/"
+Test-PiLauncher -RuntimeDir $repoPiRuntimeDir
+Write-Host "  src-tauri pi-runtime validated ($repoPiRuntimeDir)" -ForegroundColor Gray
+
+# Check for any remaining paths that would exceed NSIS MAX_PATH 260 limit.
+# NSIS builds in %TEMP%\nsiXXXX.tmp\ (~30 chars) + relative path from src-tauri.
+# Warn (don't fail) on paths >220 chars to leave margin.
+$longPaths = Get-ChildItem $repoPiRuntimeDir -Recurse -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName.Length -gt 220 }
+if ($longPaths) {
+    Write-Host "  [WARN] Found $($longPaths.Count) files with paths >220 chars (NSIS may fail):" -ForegroundColor Yellow
+    $longPaths | Select-Object -First 5 | ForEach-Object {
+        Write-Host "    $($_.FullName.Length) chars: $($_.FullName)" -ForegroundColor Gray
+    }
+    Write-Host "  Consider removing more unused packages if NSIS fails." -ForegroundColor Yellow
+} else {
+    Write-Host "  no paths >220 chars (NSIS MAX_PATH safe)" -ForegroundColor Green
+}
 
 # ---------- 3. Clean sidecar temp + build Tauri installer ----------
 Write-Host ""
@@ -306,8 +338,8 @@ finally {
 # 3b. Clean up src-tauri/pi-runtime — it's now embedded in the NSIS installer,
 #     no longer needed on disk. Removing it keeps the repo clean and avoids
 #     accidental commits of this large directory.
-if (Test-Path $shortPiRuntimeDir) {
-    Remove-Item $shortPiRuntimeDir -Recurse -Force -ErrorAction SilentlyContinue
+if (Test-Path $repoPiRuntimeDir) {
+    Remove-Item $repoPiRuntimeDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # ---------- 4. Generate latest.json + print upload checklist ----------
