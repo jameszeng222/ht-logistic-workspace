@@ -1553,9 +1553,18 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 窗口关闭时清理 sidecar，避免 uvicorn 残留进程
+            // 窗口关闭时清理所有子进程（sidecar + pi），避免残留进程：
+            // - uvicorn 残留会占用 8000 端口，下次启动 sidecar 健康检查误判
+            // - pi (node.exe) 残留会占用会话文件，且更新安装时锁住 pi-runtime 文件
+            //   导致 NSIS "无法打开要写入的文件" 错误
             if let WindowEvent::CloseRequested { .. } = event {
-                if let Some(state) = window.app_handle().try_state::<SidecarState>() {
+                let app = window.app_handle();
+                // 杀 pi
+                if let Some(state) = app.try_state::<PiState>() {
+                    stop_pi_inner(state.inner());
+                }
+                // 杀 sidecar
+                if let Some(state) = app.try_state::<SidecarState>() {
                     if let Some(mut child) = state.child.lock().unwrap().take() {
                         let _ = child.kill();
                         let _ = child.wait();
