@@ -225,9 +225,26 @@ Write-Host "  Copying pi-runtime to short path ($shortPiRuntimeDir)..." -Foregro
 if (Test-Path $shortBuildRoot) { Remove-Item $shortBuildRoot -Recurse -Force }
 New-Item -ItemType Directory -Path $shortBuildRoot -Force | Out-Null
 # robocopy handles long paths better than Copy-Item; /MIR mirrors, /NFL /NDL no file/dir listing
+# robocopy exit codes: 0-7 are success, 8+ are errors. Pipe to Out-Null to suppress default output.
 robocopy $piRuntimeDir $shortPiRuntimeDir /MIR /NFL /NDL /NJH /NJS | Out-Null
+# Verify the copy actually succeeded — robocopy can silently fail (e.g. source missing,
+# permission denied) and leave $shortPiRuntimeDir empty, which then makes tauri build
+# fail with the cryptic "resource path doesn't exist" error.
+$piLauncherInShort = Join-Path $shortPiRuntimeDir "pi.cmd"
+if (-not (Test-Path $piLauncherInShort)) {
+    Write-Host "  [ERROR] robocopy failed to copy pi-runtime to short path" -ForegroundColor Red
+    Write-Host "  Source: $piRuntimeDir" -ForegroundColor Gray
+    Write-Host "  Target: $shortPiRuntimeDir" -ForegroundColor Gray
+    Write-Host "  Source exists: $(Test-Path $piRuntimeDir)" -ForegroundColor Gray
+    Write-Host "  Target exists: $(Test-Path $shortPiRuntimeDir)" -ForegroundColor Gray
+    if (Test-Path $piRuntimeDir) {
+        Write-Host "  Source contents (first 10):" -ForegroundColor Gray
+        Get-ChildItem $piRuntimeDir -ErrorAction SilentlyContinue | Select-Object -First 10 | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
+    }
+    throw "robocopy failed: pi.cmd not found in $shortPiRuntimeDir after copy. See diagnostics above."
+}
 Test-PiLauncher -RuntimeDir $shortPiRuntimeDir
-Write-Host "  short-path pi-runtime validated" -ForegroundColor Gray
+Write-Host "  short-path pi-runtime validated ($shortPiRuntimeDir)" -ForegroundColor Gray
 
 # ---------- 3. Clean sidecar temp + build Tauri installer ----------
 Write-Host ""
