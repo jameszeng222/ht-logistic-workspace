@@ -111,9 +111,9 @@ if (Test-Path $piRuntimeDir) {
 New-Item -ItemType Directory -Path $piRuntimeDir -Force | Out-Null
 
 # 2a. Download portable Node.js (x64)
-#     用 curl.exe（Windows 10+ 自带）下载，支持断点续传 + 自动重试，
-#     比 Invoke-WebRequest 稳得多（IWR 在国内网络常中途断流 EOF）。
-#     -L 跟随重定向，--retry 自动重试，-C - 断点续传，--connect-timeout 连接超时
+#     Use curl.exe (bundled on Windows 10+) for resume + auto retry,
+#     more stable than Invoke-WebRequest (IWR often EOFs on flaky networks).
+#     -L follow redirects, --retry auto retry, -C - resume, --connect-timeout timeout
 $nodeVersion = "v22.20.0"
 $nodeArch = "x64"
 $nodeUrl = "https://nodejs.org/dist/$nodeVersion/node-$nodeVersion-win-$nodeArch.zip"
@@ -123,7 +123,7 @@ $nodeExtractDir = Join-Path $env:TEMP "node-portable-extract"
 Write-Host "  Downloading Node.js $nodeVersion (win-$nodeArch)..." -ForegroundColor Gray
 if (Test-Path $nodeExtractDir) { Remove-Item $nodeExtractDir -Recurse -Force }
 
-# 优先用 curl.exe（最稳），fallback 到 Invoke-WebRequest
+# Prefer curl.exe (most stable), fallback to Invoke-WebRequest
 $curlExe = Get-Command curl.exe -ErrorAction SilentlyContinue
 if ($curlExe) {
     Write-Host "    using curl.exe with retry + resume..." -ForegroundColor Gray
@@ -131,7 +131,7 @@ if ($curlExe) {
         --connect-timeout 30 --max-time 600 `
         -C - -o "$nodeZip" "$nodeUrl"
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $nodeZip)) {
-        throw "curl 下载失败（exit $LASTEXITCODE）。请手动下载 $nodeUrl 到 $nodeZip"
+        throw "curl download failed (exit $LASTEXITCODE). Manually download $nodeUrl to $nodeZip"
     }
 } else {
     Write-Host "    curl.exe not found, falling back to Invoke-WebRequest..." -ForegroundColor Gray
@@ -142,12 +142,12 @@ if ($curlExe) {
             $downloaded = $true
             break
         } catch {
-            Write-Host "    IWR 失败（尝试 $i/3）：$($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "    IWR failed (attempt $i/3): $($_.Exception.Message)" -ForegroundColor Yellow
             if ($i -lt 3) { Start-Sleep -Seconds 3 }
         }
     }
     if (-not $downloaded) {
-        throw "Node.js 下载失败（IWR 重试 3 次）。请手动下载 $nodeUrl 到 $nodeZip"
+        throw "Node.js download failed (IWR retried 3 times). Manually download $nodeUrl to $nodeZip"
     }
 }
 Write-Host "    download complete" -ForegroundColor Gray
@@ -245,9 +245,9 @@ Write-Host ""
 Write-Host "[3/4] Cleaning + building Tauri installer..." -ForegroundColor Yellow
 
 # 3a. Verify updater signing key is configured (required to generate .sig artifacts)
-#     NOTE: Tauri v2 官方环境变量名是 TAURI_SIGNING_PRIVATE_KEY 和
-#     TAURI_SIGNING_PRIVATE_KEY_PASSWORD（见 v2.tauri.app/reference/environment-variables）。
-#     写成 TAURI_PRIVATE_KEY 不会生效，.sig 不会生成。
+#     NOTE: Tauri v2 official env var names are TAURI_SIGNING_PRIVATE_KEY and
+#     TAURI_SIGNING_PRIVATE_KEY_PASSWORD (see v2.tauri.app/reference/environment-variables).
+#     Writing TAURI_PRIVATE_KEY won't work, .sig won't be generated.
 if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
     Write-Host ""
     Write-Host "WARNING: TAURI_SIGNING_PRIVATE_KEY environment variable not set." -ForegroundColor Red
@@ -338,9 +338,9 @@ $latestJson = @{
 } | ConvertTo-Json -Depth 5
 
 $latestJsonPath = Join-Path $bundleDir "latest.json"
-# 用 .NET API 写无 BOM 的 UTF-8（PowerShell 5.x 的 Set-Content -Encoding UTF8 会加 BOM，
-# Tauri updater 用 serde_json 解析 latest.json，serde_json 不接受 UTF-8 BOM，
-# 会报 "error decoding response body"。必须用 UTF8Encoding($false) 显式禁用 BOM。
+# Use .NET API to write UTF-8 without BOM (PowerShell 5.x Set-Content -Encoding UTF8
+# adds BOM, Tauri updater uses serde_json which rejects UTF-8 BOM, causing
+# "error decoding response body". Must use UTF8Encoding($false) to explicitly disable BOM.
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($latestJsonPath, $latestJson, $utf8NoBom)
 
