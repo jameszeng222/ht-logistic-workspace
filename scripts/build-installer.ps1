@@ -338,7 +338,11 @@ $latestJson = @{
 } | ConvertTo-Json -Depth 5
 
 $latestJsonPath = Join-Path $bundleDir "latest.json"
-Set-Content -Path $latestJsonPath -Value $latestJson -Encoding UTF8
+# 用 .NET API 写无 BOM 的 UTF-8（PowerShell 5.x 的 Set-Content -Encoding UTF8 会加 BOM，
+# Tauri updater 用 serde_json 解析 latest.json，serde_json 不接受 UTF-8 BOM，
+# 会报 "error decoding response body"。必须用 UTF8Encoding($false) 显式禁用 BOM。
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($latestJsonPath, $latestJson, $utf8NoBom)
 
 Write-Host ""
 Write-Host "================================================" -ForegroundColor Cyan
