@@ -220,65 +220,70 @@ Get-ChildItem (Join-Path $piRuntimeDir "node_modules\@types") -Directory -ErrorA
 $runtimeSize = [math]::Round((Get-ChildItem $piRuntimeDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
 Write-Host "  pi-runtime ready (about ${runtimeSize} MB after cleanup)" -ForegroundColor Green
 
-# 2e. Copy pi-runtime to src-tauri/pi-runtime/ for Tauri to pick up via
-#     relative path "pi-runtime/" in tauri.conf.json.
-#     Tauri v2 resources config doesn't support Windows absolute paths (strips
-#     drive letter), so we must use relative path.
-#     NOTE: NSIS MAX_PATH 260-char limit is NOT mitigated here. If pi-runtime
-#     contains paths >260 chars (e.g. @mistralai's deeply nested files),
-#     NSIS will fail. See 7z compression approach (TODO) for long-path solution.
+# 2e. Compress pi-runtime to src-tauri/pi-runtime.7z (single-file archive).
+#     This avoids NSIS MAX_PATH 260-char limit: pi-runtime contains @mistralai's
+#     deeply nested files with paths >260 chars that NSIS cannot package as
+#     loose files. By compressing to a single 7z, NSIS sees only one file.
+#     At runtime, main.rs extracts this 7z to %LOCALAPPDATA%\ht-logistic\pi-runtime\
+#     on first launch (and on version change, tracked by archive size marker).
 $tauriSrcDir = Join-Path $tauriDir "src-tauri"
+$pi7zPath = Join-Path $tauriSrcDir "pi-runtime.7z"
 $repoPiRuntimeDir = Join-Path $tauriSrcDir "pi-runtime"
 
-Write-Host "  Copying pi-runtime to src-tauri ($repoPiRuntimeDir)..." -ForegroundColor Gray
-# Remove existing pi-runtime dir. Use robocopy mirror trick instead of Remove-Item
-# because PowerShell Remove-Item uses ANSI Win32 APIs that fail on paths >260 chars
-# (the very problem we're trying to solve). robocopy /MIR with an empty source
-# effectively deletes all contents of the target while handling long paths.
+# Find or download 7z executable (only needed at build time, NOT bundled in installer)
+$sevenZip = $null
+$cmd7z = Get-Command 7z -ErrorAction SilentlyContinue
+if ($cmd7z) {
+    $sevenZip = $cmd7z.Source
+} elseif (Test-Path "C:\Program Files\7-Zip\7z.exe") {
+    $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+} elseif (Test-Path "C:\Program Files (x86)\7-Zip\7z.exe") {
+    $sevenZip = "C:\Program Files (x86)\7-Zip\7z.exe"
+} else {
+    # Download 7zr.exe (standalone console, ~500KB, only handles 7z format)
+    Write-Host "  7-Zip not installed, downloading 7zr.exe (standalone)..." -ForegroundColor Gray
+    $sevenZip = Join-Path $env:TEMP "7zr.exe"
+    if (-not (Test-Path $sevenZip)) {
+        & curl.exe -L --retry 5 --retry-delay 3 --retry-connrefused `
+            --connect-timeout 30 --max-time 120 `
+            -o "$sevenZip" "https://www.7-zip.org/a/7zr.exe"
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $sevenZip)) {
+            throw "Failed to download 7zr.exe. Install 7-Zip from https://7-zip.org/ or download 7zr.exe manually to $sevenZip"
+        }
+    }
+}
+Write-Host "  using 7z: $sevenZip" -ForegroundColor Gray
+
+# Clean old artifacts: remove old pi-runtime.7z and old pi-runtime/ dir (if any)
+if (Test-Path $pi7zPath) { Remove-Item $pi7zPath -Force }
 if (Test-Path $repoPiRuntimeDir) {
-    Write-Host "  cleaning existing pi-runtime dir (using robocopy for long-path safety)..." -ForegroundColor Gray
+    Write-Host "  cleaning old pi-runtime dir (using robocopy for long-path safety)..." -ForegroundColor Gray
     $emptyTemp = Join-Path $env:TEMP "ht-empty-dir-for-mirror"
     New-Item -ItemType Directory -Path $emptyTemp -Force | Out-Null
     robocopy $emptyTemp $repoPiRuntimeDir /MIR /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
     Remove-Item $repoPiRuntimeDir -Force -ErrorAction SilentlyContinue
     Remove-Item $emptyTemp -Force -ErrorAction SilentlyContinue
 }
-New-Item -ItemType Directory -Path $repoPiRuntimeDir -Force | Out-Null
-# robocopy handles long paths better than Copy-Item; /MIR mirrors, /NFL /NDL no file/dir listing
-robocopy $piRuntimeDir $repoPiRuntimeDir /MIR /NFL /NDL /NJH /NJS | Out-Null
-# Verify the copy actually succeeded — robocopy can silently fail (e.g. source missing,
-# permission denied) and leave $repoPiRuntimeDir empty, which then makes tauri build
-# fail with the cryptic "resource path doesn't exist" error.
-$piLauncherInRepo = Join-Path $repoPiRuntimeDir "pi.cmd"
-if (-not (Test-Path $piLauncherInRepo)) {
-    Write-Host "  [ERROR] robocopy failed to copy pi-runtime to src-tauri" -ForegroundColor Red
-    Write-Host "  Source: $piRuntimeDir" -ForegroundColor Gray
-    Write-Host "  Target: $repoPiRuntimeDir" -ForegroundColor Gray
-    Write-Host "  Source exists: $(Test-Path $piRuntimeDir)" -ForegroundColor Gray
-    Write-Host "  Target exists: $(Test-Path $repoPiRuntimeDir)" -ForegroundColor Gray
-    if (Test-Path $piRuntimeDir) {
-        Write-Host "  Source contents (first 10):" -ForegroundColor Gray
-        Get-ChildItem $piRuntimeDir -ErrorAction SilentlyContinue | Select-Object -First 10 | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
-    }
-    throw "robocopy failed: pi.cmd not found in $repoPiRuntimeDir after copy. See diagnostics above."
-}
-Test-PiLauncher -RuntimeDir $repoPiRuntimeDir
-Write-Host "  src-tauri pi-runtime validated ($repoPiRuntimeDir)" -ForegroundColor Gray
 
-# Check for any remaining paths that would exceed NSIS MAX_PATH 260 limit.
-# NSIS builds in %TEMP%\nsiXXXX.tmp\ (~30 chars) + relative path from src-tauri.
-# Warn (don't fail) on paths >220 chars to leave margin.
-$longPaths = Get-ChildItem $repoPiRuntimeDir -Recurse -File -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName.Length -gt 220 }
-if ($longPaths) {
-    Write-Host "  [WARN] Found $($longPaths.Count) files with paths >220 chars (NSIS may fail):" -ForegroundColor Yellow
-    $longPaths | Select-Object -First 5 | ForEach-Object {
-        Write-Host "    $($_.FullName.Length) chars: $($_.FullName)" -ForegroundColor Gray
+# Compress pi-runtime to 7z archive.
+# -t7z  : 7z format
+# -mx=5 : medium compression (good balance of speed/size; sevenz-rust2 handles it)
+# -ms=off: non-solid archive (faster random access, wider decoder compatibility)
+# Run via cmd to avoid PowerShell NativeCommandError on 7z's stderr logging.
+Write-Host "  Compressing pi-runtime to pi-runtime.7z (this may take a minute)..." -ForegroundColor Gray
+$compressLog = Join-Path $env:TEMP "ht-7z-compress.log"
+cmd /c "`"$sevenZip`" a -t7z -mx=5 -ms=off `"$pi7zPath`" `"$piRuntimeDir\*`" > `"$compressLog`" 2>&1"
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $pi7zPath)) {
+    Write-Host "  7z compress log (last 20 lines):" -ForegroundColor Red
+    if (Test-Path $compressLog) {
+        Get-Content $compressLog -Tail 20 | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
+        Write-Host "  Full log: $compressLog" -ForegroundColor Gray
     }
-    Write-Host "  Consider removing more unused packages if NSIS fails." -ForegroundColor Yellow
-} else {
-    Write-Host "  no paths >220 chars (NSIS MAX_PATH safe)" -ForegroundColor Green
+    throw "7z compression failed (exit code $LASTEXITCODE). See log above."
 }
+
+$archiveSizeMB = [math]::Round((Get-Item $pi7zPath).Length / 1MB, 1)
+Write-Host "  pi-runtime.7z created ($archiveSizeMB MB) at $pi7zPath" -ForegroundColor Green
 
 # ---------- 3. Clean sidecar temp + build Tauri installer ----------
 Write-Host ""

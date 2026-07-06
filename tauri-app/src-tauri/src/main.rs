@@ -42,11 +42,86 @@ struct SidecarState {
 const SIDECAR_URL: &str = "http://127.0.0.1:8000";
 const SIDECAR_PORT: u16 = 8000;
 
+/// 本地解压 pi-runtime 的目录：`%LOCALAPPDATA%\ht-logistic\pi-runtime\`
+/// 用 LOCALAPPDATA 而非安装目录（Program Files 只管理员可写），
+/// 且 LOCALAPPDATA 路径短，不会触发 MAX_PATH。
+fn get_local_pi_runtime_dir() -> Option<std::path::PathBuf> {
+    dirs::data_local_dir().map(|d| d.join("ht-logistic").join("pi-runtime"))
+}
+
+/// 确保 pi-runtime 已从打包的 `pi-runtime.7z` 解压到本地目录。
+///
+/// 首次启动或 7z 归档大小变化（版本更新）时触发解压。后续启动直接用缓存的本地目录。
+/// 返回本地 pi-runtime 目录路径（已包含 pi.cmd），或 None 表示无 7z 可解压（开发模式）。
+///
+/// 版本检测用 7z 文件大小作为 marker：不同版本的 pi-runtime 7z 大小必然不同，
+/// 简单可靠，无需读 CARGO_PKG_VERSION（避免与 tauri.conf.json version 不同步）。
+fn ensure_pi_runtime_extracted(resource_dir: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+    let local_dir = get_local_pi_runtime_dir()?;
+    let pi_cmd_name = if cfg!(windows) { "pi.cmd" } else { "pi" };
+    let local_pi_cmd = local_dir.join(pi_cmd_name);
+    let version_marker = local_dir.join(".7z-size");
+
+    let rd = resource_dir?;
+    let archive = rd.join("pi-runtime.7z");
+    if !archive.is_file() {
+        // 无 7z（开发模式或旧版安装），若本地已解压过则继续用
+        if local_pi_cmd.is_file() {
+            return Some(local_dir);
+        }
+        return None;
+    }
+
+    // 读 7z 文件大小作为版本 marker
+    let archive_size = std::fs::metadata(&archive).map(|m| m.len()).unwrap_or(0);
+    let expected_marker = archive_size.to_string();
+
+    // 已解压且版本匹配 → 直接用
+    let already_current = local_pi_cmd.is_file() && {
+        std::fs::read_to_string(&version_marker)
+            .map(|v| v.trim() == expected_marker)
+            .unwrap_or(false)
+    };
+    if already_current {
+        return Some(local_dir);
+    }
+
+    eprintln!("[pi] 解压 pi-runtime.7z 到 {} (大小 {} 字节)", local_dir.display(), archive_size);
+
+    // 清理旧解压目录
+    if local_dir.exists() {
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+    std::fs::create_dir_all(&local_dir).ok()?;
+
+    // 用 sevenz-rust2 纯 Rust 解压器（无需捆绑 7zr.exe）
+    match sevenz_rust2::decompress_file(&archive, &local_dir) {
+        Ok(_) => {
+            eprintln!("[pi] 解压完成");
+            let _ = std::fs::write(&version_marker, &expected_marker);
+            if local_pi_cmd.is_file() {
+                Some(local_dir)
+            } else {
+                eprintln!("[pi] 解压后未找到 pi.cmd: {}", local_pi_cmd.display());
+                None
+            }
+        }
+        Err(e) => {
+            eprintln!("[pi] 7z 解压失败: {}", e);
+            None
+        }
+    }
+}
+
 /// 查找 pi（PATH + npm 全局目录）
 ///
 /// `resource_dir`：Tauri 的 resource_dir()，打包模式下传入；开发模式可传 None。
-/// 优先查 resource_dir/pi-runtime/，因为 tauri.conf.json 里 `"./pi-runtime/"`
-/// 会把 pi-runtime 打到 resource 根目录下的 pi-runtime/ 子目录。
+/// 查找顺序：
+///   0. 从打包的 pi-runtime.7z 解压到 %LOCALAPPDATA%\ht-logistic\pi-runtime\（打包模式首选）
+///   1. resource_dir/pi-runtime/（兼容旧版松散文件打包）
+///   2. current_exe 向上 6 级找 pi-runtime（开发模式兜底）
+///   3. 当前工作目录及父目录（开发模式兜底）
+///   4. 系统 PATH 查找（用户自己装了 pi）
 fn find_pi(resource_dir: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
     use std::path::PathBuf;
     let candidates: Vec<&str> = if cfg!(windows) {
@@ -54,6 +129,21 @@ fn find_pi(resource_dir: Option<&std::path::Path>) -> Option<std::path::PathBuf>
     } else {
         vec!["pi"]
     };
+
+    // 0. 优先：从打包的 pi-runtime.7z 解压到 %LOCALAPPDATA%\ht-logistic\pi-runtime\
+    //    （仅打包模式有 7z，开发模式跳过）。这解决了 NSIS MAX_PATH 260 限制：
+    //    pi-runtime 含 @mistralai 深层嵌套文件，路径 >260 字符，NSIS 无法作为
+    //    松散文件打包。改为打包成单个 7z 文件，首启时解压到用户可写目录。
+    //    解压后 pi.cmd 在 local_dir 下，find_pi 后续逻辑会命中它。
+    if let Some(local_dir) = ensure_pi_runtime_extracted(resource_dir) {
+        for cand in &candidates {
+            let full = local_dir.join(cand);
+            if full.is_file() {
+                eprintln!("[pi] 使用 7z 解压的 pi-runtime: {}", full.display());
+                return Some(full);
+            }
+        }
+    }
 
     // 1. 优先：打包内嵌的 pi-runtime（傻瓜包模式，用户无需装 Node.js / npm）。
     //    打包时把便携版 node + pi 包放在 resource_dir/pi-runtime/ 下，

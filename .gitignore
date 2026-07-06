@@ -11,8 +11,12 @@ python-sidecar/ht-sidecar
 python-sidecar/ht-sidecar.exe
 # pi-runtime（构建时下载便携 Node + pi 包，不提交）
 pi-runtime/
-# Build script copies pi-runtime here temporarily so tauri.conf.json can
-# reference it via relative path "pi-runtime/". Never commit this.
+# Build script compresses pi-runtime to pi-runtime.7z so tauri.conf.json
+# can bundle it as a single-file resource (avoids NSIS MAX_PATH 260 limit
+# with @mistralai's deeply nested files). Never commit this.
+tauri-app/src-tauri/pi-runtime.7z
+# Old build script copied pi-runtime here as loose files (pre-7z approach).
+# Kept for safety in case old script is run; never commit.
 tauri-app/src-tauri/pi-runtime/
 
 # Tauri / Node
