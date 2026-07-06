@@ -245,6 +245,21 @@ foreach ($pkg in $unusedPackages) {
         Remove-Item $p.FullName -Force -ErrorAction SilentlyContinue
         Remove-Item $emptyTemp -Force -ErrorAction SilentlyContinue
         Write-Host "  removed unused package: $($p.FullName) (${size} MB)" -ForegroundColor Gray
+
+        # Create stub package so pi-coding-agent's require('@mistralai/mistralai')
+        # doesn't crash with MODULE_NOT_FOUND. The stub exports empty objects
+        # for all common entry points. pi-coding-agent only uses Claude (via
+        # Anthropic SDK) in our project, so Mistral AI functions are never called.
+        # Stub structure:
+        #   @mistralai/mistralai/package.json  (declares main: index.js)
+        #   @mistralai/mistralai/index.js      (module.exports = {})
+        # Note: $p.FullName (the @mistralai dir) was deleted above, recreate it.
+        $stubDir = Join-Path $p.FullName "mistralai"
+        New-Item -ItemType Directory -Path $stubDir -Force | Out-Null
+        $stubPkg = @{ name = "@mistralai/mistralai"; version = "0.0.0-stub"; main = "index.js" } | ConvertTo-Json
+        [System.IO.File]::WriteAllText((Join-Path $stubDir "package.json"), $stubPkg, (New-Object System.Text.UTF8Encoding($false)))
+        [System.IO.File]::WriteAllText((Join-Path $stubDir "index.js"), "module.exports = {};", (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host "  created stub: $stubDir" -ForegroundColor Gray
     }
 }
 
