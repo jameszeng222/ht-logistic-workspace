@@ -106,7 +106,12 @@ Write-Host ""
 Write-Host "[2/4] Preparing pi-runtime (portable Node.js + pi package)..." -ForegroundColor Yellow
 
 if (Test-Path $piRuntimeDir) {
-    Remove-Item $piRuntimeDir -Recurse -Force
+    # Use robocopy mirror trick for long-path safety (Remove-Item fails on >260 chars)
+    $emptyTemp = Join-Path $env:TEMP "ht-empty-dir-for-mirror"
+    New-Item -ItemType Directory -Path $emptyTemp -Force | Out-Null
+    robocopy $emptyTemp $piRuntimeDir /MIR /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
+    Remove-Item $piRuntimeDir -Force -ErrorAction SilentlyContinue
+    Remove-Item $emptyTemp -Force -ErrorAction SilentlyContinue
 }
 New-Item -ItemType Directory -Path $piRuntimeDir -Force | Out-Null
 
@@ -229,7 +234,13 @@ foreach ($pkg in $unusedPackages) {
     $p = Join-Path $piRuntimeDir "node_modules\$pkg"
     if (Test-Path $p) {
         $size = [math]::Round((Get-ChildItem $p -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
-        Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue
+        # Use robocopy mirror trick for long-path safety (Remove-Item fails on >260 chars
+        # which is exactly the case for @mistralai's deeply nested files)
+        $emptyTemp = Join-Path $env:TEMP "ht-empty-dir-for-mirror"
+        New-Item -ItemType Directory -Path $emptyTemp -Force | Out-Null
+        robocopy $emptyTemp $p /MIR /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
+        Remove-Item $p -Force -ErrorAction SilentlyContinue
+        Remove-Item $emptyTemp -Force -ErrorAction SilentlyContinue
         Write-Host "  removed unused package: $pkg (${size} MB)" -ForegroundColor Gray
     }
 }
@@ -246,7 +257,18 @@ $tauriSrcDir = Join-Path $tauriDir "src-tauri"
 $repoPiRuntimeDir = Join-Path $tauriSrcDir "pi-runtime"
 
 Write-Host "  Copying pi-runtime to src-tauri ($repoPiRuntimeDir)..." -ForegroundColor Gray
-if (Test-Path $repoPiRuntimeDir) { Remove-Item $repoPiRuntimeDir -Recurse -Force }
+# Remove existing pi-runtime dir. Use robocopy mirror trick instead of Remove-Item
+# because PowerShell Remove-Item uses ANSI Win32 APIs that fail on paths >260 chars
+# (the very problem we're trying to solve). robocopy /MIR with an empty source
+# effectively deletes all contents of the target while handling long paths.
+if (Test-Path $repoPiRuntimeDir) {
+    Write-Host "  cleaning existing pi-runtime dir (using robocopy for long-path safety)..." -ForegroundColor Gray
+    $emptyTemp = Join-Path $env:TEMP "ht-empty-dir-for-mirror"
+    New-Item -ItemType Directory -Path $emptyTemp -Force | Out-Null
+    robocopy $emptyTemp $repoPiRuntimeDir /MIR /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
+    Remove-Item $repoPiRuntimeDir -Force -ErrorAction SilentlyContinue
+    Remove-Item $emptyTemp -Force -ErrorAction SilentlyContinue
+}
 New-Item -ItemType Directory -Path $repoPiRuntimeDir -Force | Out-Null
 # robocopy handles long paths better than Copy-Item; /MIR mirrors, /NFL /NDL no file/dir listing
 robocopy $piRuntimeDir $repoPiRuntimeDir /MIR /NFL /NDL /NJH /NJS | Out-Null
@@ -338,8 +360,13 @@ finally {
 # 3b. Clean up src-tauri/pi-runtime — it's now embedded in the NSIS installer,
 #     no longer needed on disk. Removing it keeps the repo clean and avoids
 #     accidental commits of this large directory.
+#     Use robocopy mirror trick for long-path safety.
 if (Test-Path $repoPiRuntimeDir) {
-    Remove-Item $repoPiRuntimeDir -Recurse -Force -ErrorAction SilentlyContinue
+    $emptyTemp = Join-Path $env:TEMP "ht-empty-dir-for-mirror"
+    New-Item -ItemType Directory -Path $emptyTemp -Force | Out-Null
+    robocopy $emptyTemp $repoPiRuntimeDir /MIR /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
+    Remove-Item $repoPiRuntimeDir -Force -ErrorAction SilentlyContinue
+    Remove-Item $emptyTemp -Force -ErrorAction SilentlyContinue
 }
 
 # ---------- 4. Generate latest.json + print upload checklist ----------
