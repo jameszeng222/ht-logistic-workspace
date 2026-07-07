@@ -332,6 +332,36 @@ try {
     exit 1
 }
 
+# 4e. STRONG ASSERT: url and signature MUST match current build's version.
+#     防止"latest.json 指向旧版本 setup.exe"导致 404 或签名校验失败。
+#     之前 v0.1.5 release 上的 latest.json url 指向 0.1.1 的 setup.exe，
+#     signature 也是 0.1.1 的——因为 4c-fix 块没跑到或被绕过。
+#     这里做最终断言，不通过直接 exit 1，不让坏版本发布。
+$assertUrl = $json.platforms.'windows-x86_64'.url
+$assertSig = $json.platforms.'windows-x86_64'.signature
+if ($assertUrl -notmatch "v$newVersion/") {
+    Write-Err "ASSERT FAIL: url 不含当前版本 v$newVersion"
+    Write-Host "  url: $assertUrl" -ForegroundColor Gray
+    Write-Host "  期望 url 包含: /v$newVersion/" -ForegroundColor Yellow
+    Write-Err "禁止上传！latest.json url 指向了错误的版本，会导致 404 下载失败"
+    exit 1
+}
+if ($assertUrl -notmatch "HT[\. ]Logistic[\. ]Agent[_\.]$newVersion[_\.]x64-setup\.exe$") {
+    Write-Err "ASSERT FAIL: url 不含当前版本 $newVersion 的 setup.exe 文件名"
+    Write-Host "  url: $assertUrl" -ForegroundColor Gray
+    Write-Err "禁止上传！latest.json url 指向了错误版本的 setup.exe"
+    exit 1
+}
+# signature 解码后应包含当前版本号的 setup.exe 文件名（Tauri 签名格式: file:HT Logistic Agent_x.x.x_x64-setup.exe）
+if ($sigText -notmatch "HT Logistic Agent_$newVersion`_x64-setup\.exe") {
+    Write-Err "ASSERT FAIL: signature 不含当前版本 $newVersion 的文件名"
+    Write-Host "  signature 解码内容: $sigText" -ForegroundColor Gray
+    Write-Host "  期望包含: HT Logistic Agent_${newVersion}_x64-setup.exe" -ForegroundColor Yellow
+    Write-Err "禁止上传！signature 是为错误版本的 setup.exe 签的，会导致签名校验失败"
+    exit 1
+}
+Write-OK "ASSERT PASS: url 和 signature 都匹配当前版本 v$newVersion"
+
 # ========== 5. Print upload checklist ==========
 
 Write-Step "Step 5: Build complete! Upload checklist"
