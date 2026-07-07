@@ -267,7 +267,9 @@ try {
 
     # 4c-fix. Rewrite the url field to fix three issues that cause 404 download errors:
     #   1. Tauri's default url uses productName with SPACES ("HT Logistic Agent_0.1.x_x64-setup.exe")
-    #      but doesn't URL-encode them — GitHub returns 404.
+    #      matching the local filename. But when uploaded to GitHub Release, GitHub
+    #      REPLACES spaces with dots ("HT.Logistic.Agent_0.1.x_x64-setup.exe"). The url
+    #      must use the GitHub asset name (dots), not the local filename (spaces).
     #   2. Tauri's default url may reference the WRONG version (e.g. "0.1.1" when we're
     #      building 0.1.3) if version bump commit failed and tauri.conf.json had a stale
     #      version when Tauri read it.
@@ -275,10 +277,10 @@ try {
     #      release GitHub marks as "latest" — may not be the current build. Use the
     #      version-specific URL "/releases/download/v{version}/" instead.
     #
-    # Build the correct url from: repo + tag v{version} + URL-encoded setup.exe filename.
-    $setupFileName = $setupExe.Name  # e.g. "HT Logistic Agent_0.1.3_x64-setup.exe"
-    $encodedName = [uri]::EscapeDataString($setupFileName)
-    $correctUrl = "https://github.com/jameszeng222/ht-logistic-workspace/releases/download/v$newVersion/$encodedName"
+    # Build the correct url: repo + tag v{version} + GitHub asset name (spaces->dots).
+    $setupFileName = $setupExe.Name  # local filename, e.g. "HT Logistic Agent_0.1.3_x64-setup.exe"
+    $githubAssetName = $setupFileName -replace ' ', '.'  # GitHub replaces spaces with dots
+    $correctUrl = "https://github.com/jameszeng222/ht-logistic-workspace/releases/download/v$newVersion/$githubAssetName"
     if ($json.platforms.'windows-x86_64'.url -ne $correctUrl) {
         Write-Warn "url field needs fix (version mismatch or missing URL-encoding):"
         Write-Host "    old: $($json.platforms.'windows-x86_64'.url)" -ForegroundColor Gray
