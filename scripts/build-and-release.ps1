@@ -346,14 +346,14 @@ if ($assertUrl -notmatch "v$newVersion/") {
     Write-Err "禁止上传！latest.json url 指向了错误的版本，会导致 404 下载失败"
     exit 1
 }
-if ($assertUrl -notmatch "HT[\. ]Logistic[\. ]Agent[_\.]$newVersion[_\.]x64-setup\.exe$") {
+if ($assertUrl -notmatch "HT[\. ]Logistic[\. ]Agent[_\.]${newVersion}[_\.]x64-setup\.exe$") {
     Write-Err "ASSERT FAIL: url 不含当前版本 $newVersion 的 setup.exe 文件名"
     Write-Host "  url: $assertUrl" -ForegroundColor Gray
     Write-Err "禁止上传！latest.json url 指向了错误版本的 setup.exe"
     exit 1
 }
 # signature 解码后应包含当前版本号的 setup.exe 文件名（Tauri 签名格式: file:HT Logistic Agent_x.x.x_x64-setup.exe）
-if ($sigText -notmatch "HT Logistic Agent_$newVersion`_x64-setup\.exe") {
+if ($sigText -notmatch "HT Logistic Agent_${newVersion}_x64-setup\.exe") {
     Write-Err "ASSERT FAIL: signature 不含当前版本 $newVersion 的文件名"
     Write-Host "  signature 解码内容: $sigText" -ForegroundColor Gray
     Write-Host "  期望包含: HT Logistic Agent_${newVersion}_x64-setup.exe" -ForegroundColor Yellow
@@ -388,7 +388,7 @@ foreach ($f in $filesToUpload) {
 
 Write-Host ""
 Write-Host "GitHub Release steps:" -ForegroundColor Cyan
-Write-Host "  Option A: Auto-create release via gh CLI (if installed & authenticated)"
+Write-Host "  Option A: Auto-create release via gh CLI (if installed and authenticated)"
 Write-Host "  Option B: Manual upload via browser"
 Write-Host ""
 
@@ -403,7 +403,9 @@ try {
 
 if ($ghAvailable) {
     # Check if authenticated
-    $authStatus = (& cmd /c "gh auth status 2>&1") | Out-String
+    # NOTE: PS 5.x parses "2>&1" inside double-quoted strings as error-stream
+    # redirection. Use single-quoted string for the cmd argument to avoid this.
+    $authStatus = (& cmd /c 'gh auth status 2>&1') | Out-String
     if ($authStatus -match "Logged in to github.com") {
         Write-OK "gh CLI authenticated"
         $autoRelease = Read-Host "Create GitHub Release v$newVersion and upload 3 files automatically? (Y/n)"
@@ -415,26 +417,30 @@ if ($ghAvailable) {
             $jsonPath = $filesToUpload | Where-Object { $_.Desc -eq "Updater manifest" } | Select-Object -ExpandProperty Path
 
             # Check if release already exists, delete if so (to allow re-upload)
-            $existingRelease = (& cmd /c "gh release view v$newVersion 2>&1") | Out-String
+            $existingRelease = (& cmd /c 'gh release view {0} 2>&1' -f "v$newVersion") | Out-String
             if ($LASTEXITCODE -eq 0) {
                 Write-Warn "Release v$newVersion already exists. Deleting and recreating..."
-                & cmd /c "gh release delete v$newVersion --yes 2>&1" | Out-Null
+                & cmd /c 'gh release delete {0} --yes 2>&1' -f "v$newVersion" | Out-Null
             }
 
-            # Create release with all 3 files attached
-            $releaseNotes = "HT Logistic Agent v$newVersion`n`nAutomated build from commit $(git rev-parse --short HEAD)."
-            $result = (& cmd /c "gh release create v$newVersion `"$setupExePath`" `"$sigPath`" `"$jsonPath`" --title `"HT Logistic Agent v$newVersion`" --notes `"$releaseNotes`" 2>&1") | Out-String
+            # Create release with all 3 files attached.
+            # Build args separately to avoid PS 5.x parsing issues with 2>&1 and
+            # embedded quotes in a single double-quoted string.
+            $releaseNotes = "HT Logistic Agent v$newVersion. Automated build from commit $(git rev-parse --short HEAD)."
+            $createArgs = @('release', 'create', "v$newVersion", $setupExePath, $sigPath, $jsonPath,
+                            '--title', "HT Logistic Agent v$newVersion", '--notes', $releaseNotes)
+            & gh @createArgs 2>&1 | Out-String | ForEach-Object { Write-Host $_ -ForegroundColor Gray }
+            $createExit = $LASTEXITCODE
 
-            if ($LASTEXITCODE -eq 0) {
+            if ($createExit -eq 0) {
                 Write-OK "Release v$newVersion created and 3 files uploaded!"
-                Write-Host "  $result" -ForegroundColor Gray
                 Write-Host ""
                 Write-Host "Client 'Check for updates' will now get v$newVersion." -ForegroundColor Green
 
                 # Push version bump commit (since release is published)
                 if (-not $SkipVersionBump) {
                     Write-Host "Pushing version bump commit..." -ForegroundColor Gray
-                    & cmd /c "git push origin main 2>&1" | Out-String | Write-Host
+                    & git push origin main 2>&1 | Out-String | Write-Host
                     if ($LASTEXITCODE -eq 0) {
                         Write-OK "Version bump pushed. Repo in sync with released v$newVersion."
                     }
@@ -470,7 +476,7 @@ Write-Host "Manual upload required. Files to upload:" -ForegroundColor Cyan
 foreach ($f in $filesToUpload) {
     if (Test-Path $f.Path) {
         $size = [math]::Round((Get-Item $f.Path).Length / 1MB, 2)
-        Write-Host "  [$($f.Desc)] $f.Path ($size MB)" -ForegroundColor White
+        Write-Host "  [$($f.Desc)] $($f.Path) (${size} MB)" -ForegroundColor White
     } else {
         Write-Host "  [$($f.Desc)] $f.Path  (MISSING!)" -ForegroundColor Red
     }
