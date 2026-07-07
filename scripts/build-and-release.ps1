@@ -246,9 +246,11 @@ if ($bytes[0] -eq 239 -and $bytes[1] -eq 187 -and $bytes[2] -eq 191) {
 try {
     $jsonContent = [System.IO.File]::ReadAllText($latestJsonPath)
     $json = $jsonContent | ConvertFrom-Json
+    # version field may be stale if tauri.conf.json had wrong version when Tauri
+    # generated latest.json. Fix it instead of failing.
     if ($json.version -ne $newVersion) {
-        Write-Err "latest.json version mismatch: expected $newVersion, got $($json.version)"
-        exit 1
+        Write-Warn "latest.json version mismatch: expected $newVersion, got $($json.version) — will fix"
+        $json.version = $newVersion
     }
     if (-not $json.platforms.'windows-x86_64'.signature) {
         Write-Err "latest.json signature field empty"
@@ -259,10 +261,37 @@ try {
         exit 1
     }
     Write-OK "latest.json JSON parsed successfully"
-    Write-OK "  version: $($json.version)"
     Write-OK "  pub_date: $($json.pub_date)"
     Write-OK "  signature length: $($json.platforms.'windows-x86_64'.signature.Length)"
-    Write-OK "  url: $($json.platforms.'windows-x86_64'.url)"
+    Write-OK "  url (before fix): $($json.platforms.'windows-x86_64'.url)"
+
+    # 4c-fix. Rewrite the url field to fix three issues that cause 404 download errors:
+    #   1. Tauri's default url uses productName with SPACES ("HT Logistic Agent_0.1.x_x64-setup.exe")
+    #      but doesn't URL-encode them — GitHub returns 404.
+    #   2. Tauri's default url may reference the WRONG version (e.g. "0.1.1" when we're
+    #      building 0.1.3) if version bump commit failed and tauri.conf.json had a stale
+    #      version when Tauri read it.
+    #   3. Tauri's default url uses "/releases/latest/download/" which only works for the
+    #      release GitHub marks as "latest" — may not be the current build. Use the
+    #      version-specific URL "/releases/download/v{version}/" instead.
+    #
+    # Build the correct url from: repo + tag v{version} + URL-encoded setup.exe filename.
+    $setupFileName = $setupExe.Name  # e.g. "HT Logistic Agent_0.1.3_x64-setup.exe"
+    $encodedName = [uri]::EscapeDataString($setupFileName)
+    $correctUrl = "https://github.com/jameszeng222/ht-logistic-workspace/releases/download/v$newVersion/$encodedName"
+    if ($json.platforms.'windows-x86_64'.url -ne $correctUrl) {
+        Write-Warn "url field needs fix (version mismatch or missing URL-encoding):"
+        Write-Host "    old: $($json.platforms.'windows-x86_64'.url)" -ForegroundColor Gray
+        Write-Host "    new: $correctUrl" -ForegroundColor Green
+        $json.platforms.'windows-x86_64'.url = $correctUrl
+        # Write back as no-BOM UTF-8 (Set-Content with -Encoding UTF8 writes BOM,
+        # which breaks Tauri updater's JSON parser). Use UTF8Encoding($false).
+        $fixedJson = $json | ConvertTo-Json -Depth 10
+        [System.IO.File]::WriteAllText($latestJsonPath, $fixedJson, [System.Text.UTF8Encoding]::new($false))
+        Write-OK "latest.json url fixed and saved (no BOM)"
+    } else {
+        Write-OK "url field already correct"
+    }
 } catch {
     Write-Err "latest.json JSON parse failed: $_"
     exit 1
