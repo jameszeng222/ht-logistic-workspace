@@ -22,6 +22,9 @@ dirs = "5"
 # @mistralai deeply nested files with paths >260 chars that NSIS can't package
 # as loose files).
 sevenz-rust2 = "0.13"
+# HTTP client for test_model_connection command (validates API keys by
+# sending a minimal chat completion request to the provider's API).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

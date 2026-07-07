@@ -157,6 +157,8 @@ export default function App() {
   const [modelConfigDirty, setModelConfigDirty] = useState(false);
   const [modelConfigSaving, setModelConfigSaving] = useState(false);
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
+  // 测试连接状态：key = providerId, value = { status: 'testing'|'ok'|'fail', message, model }
+  const [connTest, setConnTest] = useState<Record<string, { status: "testing" | "ok" | "fail"; message?: string; model?: string }>>({});
 
   // 系统提示词编辑器（读写 ~/.pi/agent/SYSTEM.md）
   const [systemPrompt, setSystemPrompt] = useState("");
@@ -1863,6 +1865,44 @@ export default function App() {
                                 rows={3}
                                 onChange={(e) => updateProvider(provider.id, { models: e.target.value.split("\n").filter((s) => s.trim()) })}
                               />
+                            </div>
+                            <div className="model-config-field" style={{ flexDirection: "row", alignItems: "center", gap: "var(--space-2)" }}>
+                              <button
+                                className="btn-secondary"
+                                disabled={connTest[provider.id]?.status === "testing" || !provider.apiKey}
+                                onClick={async () => {
+                                  setConnTest((prev) => ({ ...prev, [provider.id]: { status: "testing" } }));
+                                  try {
+                                    const result = await invoke<any>("test_model_connection", {
+                                      providerId: provider.id,
+                                      apiKey: provider.apiKey,
+                                      baseUrl: provider.baseUrl || null,
+                                      model: provider.defaultModel || null,
+                                    });
+                                    if (result.success) {
+                                      setConnTest((prev) => ({ ...prev, [provider.id]: { status: "ok", message: result.message, model: result.model } }));
+                                    } else {
+                                      const hint = result.hint ? `（${result.hint}）` : "";
+                                      setConnTest((prev) => ({ ...prev, [provider.id]: { status: "fail", message: `${result.message}${hint}` } }));
+                                    }
+                                  } catch (e: any) {
+                                    setConnTest((prev) => ({ ...prev, [provider.id]: { status: "fail", message: String(e) } }));
+                                  }
+                                }}
+                              >
+                                {connTest[provider.id]?.status === "testing" ? "测试中…" : "测试连接"}
+                              </button>
+                              {connTest[provider.id]?.status === "ok" && (
+                                <span style={{ color: "var(--success, #16a34a)", fontSize: 12 }}>
+                                  ✓ {connTest[provider.id].message}
+                                  {connTest[provider.id].model && <span style={{ color: "var(--fg-muted)" }}> (模型: {connTest[provider.id].model})</span>}
+                                </span>
+                              )}
+                              {connTest[provider.id]?.status === "fail" && (
+                                <span style={{ color: "var(--error, #dc2626)", fontSize: 12, wordBreak: "break-all" }}>
+                                  ✗ {connTest[provider.id].message}
+                                </span>
+                              )}
                             </div>
                           </div>
                         )}

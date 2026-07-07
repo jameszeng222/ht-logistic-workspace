@@ -1034,8 +1034,21 @@ impl Default for ModelConfig {
                     name: "Anthropic".into(),
                     api_key: String::new(),
                     base_url: None,
-                    models: vec!["claude-3-5-sonnet-latest".into(), "claude-3-opus-latest".into(), "claude-3-haiku-20240307".into()],
-                    default_model: Some("claude-3-5-sonnet-latest".into()),
+                    models: vec!["claude-sonnet-4-5-20250929".into(), "claude-opus-4-1-20250805".into(), "claude-haiku-4-5-20251001".into()],
+                    default_model: Some("claude-sonnet-4-5-20250929".into()),
+                    enabled: false,
+                },
+                ModelProvider {
+                    id: "deepseek".into(),
+                    name: "DeepSeek".into(),
+                    api_key: String::new(),
+                    // DeepSeek 官方文档 base_url 是 https://api.deepseek.com (不带 /v1,
+                    // 与 OpenAI SDK 兼容路径自动拼接)。旧文档写 /v1 也能用但不推荐。
+                    base_url: Some("https://api.deepseek.com".into()),
+                    // deepseek-chat / deepseek-reasoner 将于 2026/07/24 弃用,
+                    // 分别对应 v4-flash 的非思考/思考模式。新模型名优先。
+                    models: vec!["deepseek-v4-flash".into(), "deepseek-v4-pro".into(), "deepseek-chat".into(), "deepseek-reasoner".into()],
+                    default_model: Some("deepseek-v4-flash".into()),
                     enabled: false,
                 },
                 ModelProvider {
@@ -1043,17 +1056,8 @@ impl Default for ModelConfig {
                     name: "OpenAI".into(),
                     api_key: String::new(),
                     base_url: None,
-                    models: vec!["gpt-4o".into(), "gpt-4o-mini".into(), "gpt-4-turbo".into()],
-                    default_model: Some("gpt-4o".into()),
-                    enabled: false,
-                },
-                ModelProvider {
-                    id: "deepseek".into(),
-                    name: "DeepSeek".into(),
-                    api_key: String::new(),
-                    base_url: Some("https://api.deepseek.com/v1".into()),
-                    models: vec!["deepseek-chat".into(), "deepseek-reasoner".into()],
-                    default_model: Some("deepseek-chat".into()),
+                    models: vec!["gpt-4.1".into(), "gpt-4.1-mini".into(), "gpt-4o".into(), "gpt-4o-mini".into(), "o3-mini".into()],
+                    default_model: Some("gpt-4.1".into()),
                     enabled: false,
                 },
                 ModelProvider {
@@ -1061,8 +1065,8 @@ impl Default for ModelConfig {
                     name: "Google Gemini".into(),
                     api_key: String::new(),
                     base_url: None,
-                    models: vec!["gemini-2.0-flash".into(), "gemini-2.0-pro".into(), "gemini-1.5-pro".into()],
-                    default_model: Some("gemini-2.0-flash".into()),
+                    models: vec!["gemini-2.5-flash".into(), "gemini-2.5-pro".into(), "gemini-2.0-flash".into()],
+                    default_model: Some("gemini-2.5-flash".into()),
                     enabled: false,
                 },
                 ModelProvider {
@@ -1070,8 +1074,8 @@ impl Default for ModelConfig {
                     name: "OpenRouter".into(),
                     api_key: String::new(),
                     base_url: Some("https://openrouter.ai/api/v1".into()),
-                    models: vec!["anthropic/claude-3.5-sonnet".into(), "openai/gpt-4o".into(), "google/gemini-flash-1.5".into()],
-                    default_model: Some("anthropic/claude-3.5-sonnet".into()),
+                    models: vec!["anthropic/claude-sonnet-4.5".into(), "openai/gpt-4.1".into(), "google/gemini-2.5-flash".into(), "deepseek/deepseek-v4-flash".into()],
+                    default_model: Some("anthropic/claude-sonnet-4.5".into()),
                     enabled: false,
                 },
             ],
@@ -1192,6 +1196,172 @@ fn apply_model_config_sync() -> Result<String, String> {
         Ok("没有启用的提供商".into())
     } else {
         Ok(format!("已应用：{}", applied.join("、")))
+    }
+}
+
+/// 测试模型连接是否可用（验证 API Key 是否有效）。
+///
+/// 发一个最小的 chat completion 请求（max_tokens=1）到 provider 的 API，
+/// 根据 HTTP 状态码判断 key 是否有效：
+/// - 200：key 有效，返回成功
+/// - 401/403：key 无效或权限不足
+/// - 404：base_url 或 model 名错误
+/// - 其他：返回错误信息供用户排查
+///
+/// 支持两种 API 格式：
+/// - OpenAI 兼容（DeepSeek/OpenAI/Gemini/OpenRouter/Groq/Mistral）：POST /chat/completions
+/// - Anthropic：POST /v1/messages（header 格式不同，用 x-api-key）
+#[tauri::command]
+async fn test_model_connection(provider_id: String, api_key: String, base_url: Option<String>, model: Option<String>) -> Result<serde_json::Value, String> {
+    if api_key.is_empty() {
+        return Err("API Key 为空".into());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败：{e}"))?;
+
+    // 根据 provider 决定 URL、header 格式、body
+    let (url, header_kind, body) = match provider_id.as_str() {
+        "anthropic" => {
+            let base = base_url.as_deref().unwrap_or("https://api.anthropic.com");
+            let url = format!("{}/v1/messages", base.trim_end_matches('/'));
+            let model_name = model.as_deref().unwrap_or("claude-sonnet-4-5-20250929");
+            let body = serde_json::json!({
+                "model": model_name,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}]
+            });
+            (url, "anthropic", body)
+        }
+        "deepseek" => {
+            // DeepSeek: https://api.deepseek.com/chat/completions (OpenAI 兼容)
+            let base = base_url.as_deref().unwrap_or("https://api.deepseek.com");
+            let url = format!("{}/chat/completions", base.trim_end_matches('/'));
+            let model_name = model.as_deref().unwrap_or("deepseek-v4-flash");
+            let body = serde_json::json!({
+                "model": model_name,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}]
+            });
+            (url, "openai", body)
+        }
+        "openai" => {
+            let base = base_url.as_deref().unwrap_or("https://api.openai.com");
+            let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+            let model_name = model.as_deref().unwrap_or("gpt-4.1-mini");
+            let body = serde_json::json!({
+                "model": model_name,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}]
+            });
+            (url, "openai", body)
+        }
+        "google" | "gemini" => {
+            // Gemini OpenAI 兼容端点
+            let base = base_url.as_deref().unwrap_or("https://generativelanguage.googleapis.com");
+            let url = format!("{}/v1beta/openai/chat/completions", base.trim_end_matches('/'));
+            let model_name = model.as_deref().unwrap_or("gemini-2.5-flash");
+            let body = serde_json::json!({
+                "model": model_name,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}]
+            });
+            (url, "openai", body)
+        }
+        "openrouter" => {
+            let base = base_url.as_deref().unwrap_or("https://openrouter.ai/api/v1");
+            let url = format!("{}/chat/completions", base.trim_end_matches('/'));
+            let model_name = model.as_deref().unwrap_or("openai/gpt-4.1-mini");
+            let body = serde_json::json!({
+                "model": model_name,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}]
+            });
+            (url, "openai", body)
+        }
+        "mistral" => {
+            let base = base_url.as_deref().unwrap_or("https://api.mistral.ai");
+            let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+            let model_name = model.as_deref().unwrap_or("mistral-small-latest");
+            let body = serde_json::json!({
+                "model": model_name,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}]
+            });
+            (url, "openai", body)
+        }
+        "groq" => {
+            let base = base_url.as_deref().unwrap_or("https://api.groq.com/openai");
+            let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+            let model_name = model.as_deref().unwrap_or("llama-3.3-70b-versatile");
+            let body = serde_json::json!({
+                "model": model_name,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}]
+            });
+            (url, "openai", body)
+        }
+        _ => return Err(format!("不支持的 provider: {provider_id}")),
+    };
+
+    // 构造请求
+    let mut req = client.post(&url).json(&body);
+    match header_kind {
+        "anthropic" => {
+            req = req
+                .header("x-api-key", &api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json");
+        }
+        _ => {
+            req = req
+                .header("Authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json");
+        }
+    }
+
+    let resp = req.send().await.map_err(|e| format!("请求失败：{e}"))?;
+    let status = resp.status().as_u16();
+    let text = resp.text().await.unwrap_or_default();
+
+    if status == 200 {
+        // 解析返回的模型名（如果有）让用户确认生效的模型
+        let returned_model = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(|s| s.to_string()));
+        Ok(serde_json::json!({
+            "success": true,
+            "status": status,
+            "model": returned_model,
+            "message": "连接成功，API Key 有效"
+        }))
+    } else {
+        // 尝试提取 error.message
+        let err_msg = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| {
+                v.get("error")
+                    .and_then(|e| e.get("message").and_then(|m| m.as_str()).map(|s| s.to_string()))
+                    .or_else(|| v.get("message").and_then(|m| m.as_str()).map(|s| s.to_string()))
+            })
+            .unwrap_or_else(|| {
+                if text.len() > 200 { format!("{}...", &text[..200]) } else { text.clone() }
+            });
+        let hint = match status {
+            401 => "API Key 无效或已过期",
+            403 => "API Key 权限不足，或触发了内容审核",
+            404 => "base_url 或 model 名错误",
+            429 => "请求过于频繁或余额不足",
+            _ => "",
+        };
+        Ok(serde_json::json!({
+            "success": false,
+            "status": status,
+            "message": err_msg,
+            "hint": hint
+        }))
     }
 }
 
@@ -1700,7 +1870,7 @@ fn main() {
             sidecar_url, sidecar_status, stop_sidecar,
             write_binary_file, open_in_explorer, open_update_folder,
             list_extensions, install_extension, uninstall_extension,
-            get_model_config, save_model_config, apply_model_config,
+            get_model_config, save_model_config, apply_model_config, test_model_connection,
             list_dir, open_file, get_agent_paths, path_exists
         ])
         .setup(|app| {
