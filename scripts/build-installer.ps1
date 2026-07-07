@@ -329,6 +329,21 @@ Get-ChildItem $sidecarDir -Recurse -Directory -Filter "__pycache__" -ErrorAction
 Push-Location $tauriDir
 try {
     npm install --silent
+
+    # 3a-pre. Clear stale NSIS bundle artifacts before building.
+    # Tauri's incremental build reuses any existing *-setup.exe in the bundle/nsis
+    # dir if it thinks nothing changed. When version is bumped in tauri.conf.json,
+    # Tauri DOES regenerate, but an OLD setup.exe with the previous version number
+    # can linger in the dir. The 4e ASSERT in build-and-release.ps1 then picks up
+    # that stale file (Get-ChildItem *-setup.exe | Select -First 1) and fails with
+    # "url does not contain current version setup.exe filename".
+    # Fix: wipe the nsis bundle dir before each build so only fresh artifacts remain.
+    $nsisBundleDir = Join-Path $tauriDir "src-tauri\target\release\bundle\nsis"
+    if (Test-Path $nsisBundleDir) {
+        Write-Host "  cleaning stale NSIS bundle dir..." -ForegroundColor Gray
+        Remove-Item $nsisBundleDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     npm run tauri build
     if ($LASTEXITCODE -ne 0) { throw "tauri build failed" }
 }

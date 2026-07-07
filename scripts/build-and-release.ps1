@@ -206,7 +206,19 @@ if (-not (Test-Path $bundleDir)) {
 }
 
 # 4a. Check 3 required files
-$setupExe = Get-ChildItem (Join-Path $bundleDir "*-setup.exe") -ErrorAction SilentlyContinue | Select-Object -First 1
+#     Prefer the setup.exe matching the current build version. If a stale
+#     setup.exe from a previous version lingers in the bundle dir (shouldn't
+#     happen now that build-installer.ps1 wipes nsis dir pre-build, but be
+#     defensive), picking the wrong one causes 404 + signature mismatch.
+$allSetups = Get-ChildItem (Join-Path $bundleDir "*-setup.exe") -ErrorAction SilentlyContinue
+$setupExe = $allSetups | Where-Object { $_.Name -match "${newVersion}_x64-setup\.exe$" } | Select-Object -First 1
+if (-not $setupExe -and $allSetups) {
+    # Fallback: if no version-match, use the newest one but warn loudly.
+    $setupExe = $allSetups | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    Write-Warn "No setup.exe matches current version $newVersion, using newest: $($setupExe.Name)"
+    Write-Warn "This usually means tauri.conf.json version was not bumped before build, OR"
+    Write-Warn "Tauri reused stale bundle artifacts. Check tauri.conf.json version field."
+}
 if (-not $setupExe) {
     Write-Err "setup.exe not found"
     exit 1
