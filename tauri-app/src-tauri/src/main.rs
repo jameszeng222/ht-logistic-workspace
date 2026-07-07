@@ -1503,6 +1503,80 @@ async fn open_in_explorer(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 打开更新下载文件夹。
+///
+/// Tauri updater 下载的 setup.exe 存放在系统临时目录（Windows: %TEMP%）。
+/// 如果安装失败（如 "无法打开要写入的文件 ht-sidecar"），下载的安装包
+/// 可能还在临时目录里，用户可以手动找到并重新运行。
+///
+/// 本命令搜索 %TEMP%（递归 2 层，覆盖 Tauri 的 .tmpXXXXXX/ 子目录）
+/// 找最新的 *-setup.exe，用 explorer /select 选中它；没找到则打开 %TEMP% 本身。
+#[tauri::command]
+async fn open_update_folder() -> Result<String, String> {
+    let temp_dir = std::env::temp_dir();
+
+    // 递归搜索 temp_dir 下（最多 2 层深）所有 *-setup.exe，
+    // 按修改时间排序取最新的。Tauri updater 下载路径形如
+    // %TEMP%\.tmpXXXXXX\HT Logistic Agent_0.1.x_x64-setup.exe
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+
+    fn scan_dir(dir: &std::path::Path, depth: u32, newest: &mut Option<(std::time::SystemTime, std::path::PathBuf)>) {
+        if depth > 2 { return; }
+        let entries = match std::fs::read_dir(dir) { Ok(e) => e, Err(_) => return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // 跳过明显无关的目录，减少扫描时间
+                let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                if name.starts_with('.') || name.starts_with("pip-") || name.starts_with("rust") {
+                    // .tmpXXXXXX 目录要扫（Tauri 下载在这），其他 . 开头的也扫
+                }
+                scan_dir(&path, depth + 1, newest);
+            } else if path.is_file() {
+                let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                if name.ends_with("-setup.exe") || name.contains("setup") && name.ends_with(".exe") {
+                    if let Ok(meta) = entry.metadata() {
+                        if let Ok(mtime) = meta.modified() {
+                            match newest {
+                                Some((cur_time, _)) if &mtime <= cur_time => {}
+                                _ => *newest = Some((mtime, path.clone())),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    scan_dir(&temp_dir, 0, &mut newest);
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some((_, ref path)) = newest {
+            let path_str = path.to_string_lossy().to_string();
+            Command::new("explorer")
+                .args(["/select,", &path_str])
+                .spawn()
+                .map_err(|e| format!("打开资源管理器失败：{e}"))?;
+            return Ok(format!("已找到下载的安装包并打开所在文件夹：{}", path_str));
+        }
+        // 没找到 setup.exe，直接打开 %TEMP%
+        let temp_str = temp_dir.to_string_lossy().to_string();
+        Command::new("explorer").arg(&temp_str).spawn()
+            .map_err(|e| format!("打开临时文件夹失败：{e}"))?;
+        return Ok(format!("未找到已下载的安装包，已打开临时文件夹：{}", temp_str));
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let dir = newest.as_ref()
+            .and_then(|(_, p)| p.parent())
+            .map(|d| d.to_string_lossy().to_string())
+            .unwrap_or_else(|| temp_dir.to_string_lossy().to_string());
+        Command::new("xdg-open").arg(&dir).spawn()
+            .map_err(|e| format!("打开文件管理器失败：{e}"))?;
+        Ok(format!("已打开更新文件夹：{}", dir))
+    }
+}
+
 /// 目录条目信息
 #[derive(serde::Serialize)]
 struct DirEntryInfo {
@@ -1624,7 +1698,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             start_pi, stop_pi, restart_pi, send_command, send_request, scan_sessions, delete_session, check_env_keys, read_text_file, write_text_file, read_session_history,
             sidecar_url, sidecar_status, stop_sidecar,
-            write_binary_file, open_in_explorer,
+            write_binary_file, open_in_explorer, open_update_folder,
             list_extensions, install_extension, uninstall_extension,
             get_model_config, save_model_config, apply_model_config,
             list_dir, open_file, get_agent_paths, path_exists

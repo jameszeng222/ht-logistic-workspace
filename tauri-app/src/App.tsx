@@ -2101,8 +2101,19 @@ export default function App() {
                     <div className="setting-desc" style={{ color: "var(--error, #dc2626)" }}>
                       ✗ 检查更新失败：{updateStatus.message}
                     </div>
-                    <div style={{ marginTop: 6 }}>
+                    <div style={{ display: "flex", gap: "var(--space-2)", marginTop: 6, flexWrap: "wrap" }}>
                       <button className="btn-secondary" onClick={doCheckUpdate}>重试</button>
+                      <button className="btn-secondary" onClick={async () => {
+                        try {
+                          const msg = await invoke("open_update_folder");
+                          console.log(msg);
+                        } catch (e) {
+                          console.error("打开更新文件夹失败:", e);
+                        }
+                      }}>打开更新文件夹</button>
+                    </div>
+                    <div className="setting-desc" style={{ color: "var(--fg-subtle)", marginTop: 4, fontSize: 12 }}>
+                      如果下载已完成但安装失败，可在更新文件夹中找到安装包手动运行。
                     </div>
                   </div>
                 )}
