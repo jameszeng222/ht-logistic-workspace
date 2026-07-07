@@ -1,6 +1,6 @@
 # HT Logistic Workspace
 
-HT Logistic Workspace 是一个面向物流日常工作的本地 AI 工作台。当前重点是把「单据制作」「Excel 数据分析」「AI 助手」「本地文件查看」放在同一个客户端页面里，减少在工具、文件和会话之间来回切换。
+HT Logistic Workspace 是一个面向物流日常工作的本地 AI 工作台。把「单据制作」「Excel 数据分析」「AI 助手」「本地文件查看」放在同一个客户端页面里，减少在工具、文件和会话之间来回切换。打包成傻瓜安装包后，用户无需预装 Node.js / Python / Rust 即可使用。
 
 ## 当前定位
 
@@ -8,8 +8,8 @@ HT Logistic Workspace 是一个面向物流日常工作的本地 AI 工作台。
 - 物流数据分析：上传 Excel/CSV，自动生成统计、分布、Top 频次、相关性等 JSON 报告，并可交给助手解读。
 - AI 助手：Tauri 主进程启动 Pi RPC，前端提供会话、模型、权限、工具调用入口。
 - 本地文件侧栏：在同一页面查看当前项目/会话目录文件，方便助手和工具围绕文件工作。
-
-报关相关工具代码仍保留在 Python sidecar 和 Pi 扩展中，但当前客户端工具区优先展示日常高频流程：单据制作和数据分析。
+- 傻瓜包分发：一键构建 NSIS 安装包，内嵌 Python sidecar + 便携 Node.js + Pi，新电脑装完即用。
+- 自动更新：基于 Tauri updater + GitHub Release，支持版本检查、下载、签名校验、自动安装。
 
 ## 技术架构
 
@@ -18,32 +18,93 @@ Tauri v2 desktop app
   ├─ React + Vite frontend
   │   ├─ AI chat / session list / composer
   │   ├─ logistics tools panel
-  │   └─ file browser sidebar
+  │   ├─ file browser sidebar
+  │   └─ settings (model config / system prompt / update)
   ├─ Rust main process
-  │   ├─ starts Pi in RPC mode
+  │   ├─ starts Pi in RPC mode (from bundled pi-runtime.7z)
   │   ├─ scans Pi session files
   │   ├─ manages model config and agent files
-  │   └─ starts Python sidecar
+  │   ├─ starts Python sidecar (with health check)
+  │   ├─ test_model_connection (validates API keys)
+  │   └─ open_update_folder (finds downloaded setup.exe)
   ├─ Python sidecar (FastAPI on 127.0.0.1:8000)
   │   ├─ invoice / packing generation
   │   ├─ customs tools
   │   └─ Excel data analysis
-  └─ Pi extension
+  └─ Pi runtime (bundled, extracted to %LOCALAPPDATA%)
       └─ registers logistic_* tools that call the sidecar
 ```
 
 ## 目录结构
 
 ```text
-tauri-app/          Tauri + React 客户端
-python-sidecar/     FastAPI 工具服务和物流工具实现
-pi-extensions/      Pi all-in-one extension 和安装脚本
-pi-agent-config/    Pi SYSTEM.md 与 skills 配置
-scripts/            辅助脚本
-dev.ps1             一键开发启动脚本
-deploy.ps1          安装/部署/验证脚本
-PROJECT_HANDOFF.md  给后续代码模型接手的详细上下文
+tauri-app/                  Tauri + React 客户端
+  src-tauri/
+    src/main.rs             Rust 主进程（Pi/sidecar/命令）
+    installer-hooks.nsh     NSIS 安装前钩子（杀残留进程）
+    tauri.conf.json         Tauri 配置（resources/updater/signing）
+    Cargo.toml              Rust 依赖
+  src/                      React 前端
+python-sidecar/             FastAPI 工具服务和物流工具实现
+pi-extensions/              Pi all-in-one extension 和安装脚本
+pi-agent-config/            Pi SYSTEM.md 与 skills 配置
+scripts/
+  build-installer.ps1       构建安装包（PyInstaller + pi-runtime.7z + NSIS）
+  build-and-release.ps1     一键构建 + 版本 bump + GitHub Release
+  install-python.ps1        Python 环境安装
+dev.ps1                     一键开发启动脚本
+deploy.ps1                  安装/部署/验证脚本
+CODEX_SUMMARY.md            项目摘要
+PROJECT_HANDOFF.md          给后续代码模型接手的详细上下文
 ```
+
+## 傻瓜包打包
+
+一键构建 Windows NSIS 安装包，新电脑装完即用，无需预装任何运行时。
+
+```powershell
+# 前置：Rust + Node.js + Python + 签名密钥（C:\Users\HT\.tauri\ht-logistic.key）
+.\scripts\build-and-release.ps1
+```
+
+构建流程：
+1. PyInstaller 把 Python sidecar 打成单文件 `ht-sidecar.exe`（含完整 Python 运行时）
+2. 下载便携版 Node.js + npm install `@earendil-works/pi-coding-agent` → 压缩为 `pi-runtime.7z`
+3. Tauri build 把 `ht-sidecar.exe` + `pi-runtime.7z` 作为 resources 打入安装包
+4. NSIS 生成 `HT Logistic Agent_x.x.x_x64-setup.exe` + `.sig` + `latest.json`
+5. 自动创建 GitHub Release 并上传 3 个文件
+
+**关键设计**：
+- `pi-runtime.7z` 压缩为单文件，绕过 NSIS MAX_PATH 260 字符限制（@mistralai 深层嵌套路径）
+- 首次启动时 Rust 用 `sevenz-rust2` 解压 7z 到 `%LOCALAPPDATA%\ht-logistic\pi-runtime\`
+- NSIS 安装前钩子 `taskkill` 残留进程，避免 "无法打开要写入的文件 ht-sidecar" 错误
+
+## 自动更新
+
+- 更新源：GitHub Release 的 `latest.json`
+- 触发方式：设置页手动检查（不做启动时自动检查）
+- 签名校验：构建时用 `TAURI_SIGNING_PRIVATE_KEY` 签名，更新时用 pubkey 校验
+- 安装失败处理：设置页提供"打开更新文件夹"按钮，定位已下载的 setup.exe 手动重装
+
+`latest.json` 构建后由脚本自动修正：
+- url 用 GitHub asset 实际名（空格→点）
+- signature 从 `.sig` 文件读取（保证与 setup.exe 匹配）
+
+## 模型配置
+
+设置页可配置多个 LLM provider，填入 API Key 后注入环境变量供 Pi 读取。每个 provider 支持"测试连接"——发 `max_tokens=1` 的最小请求验证 key 是否有效。
+
+支持的 provider（默认模型已按官方文档更新）：
+
+| Provider | 默认模型 | base_url |
+|----------|---------|----------|
+| DeepSeek | deepseek-v4-flash | https://api.deepseek.com |
+| OpenAI | gpt-4.1 | https://api.openai.com |
+| Anthropic | claude-sonnet-4-5-20250929 | https://api.anthropic.com |
+| Google Gemini | gemini-2.5-flash | https://generativelanguage.googleapis.com |
+| OpenRouter | anthropic/claude-sonnet-4.5 | https://openrouter.ai/api/v1 |
+
+配置文件：`~/.pi/agent/model-config.json`
 
 ## 开发启动
 
@@ -126,14 +187,17 @@ Pi 扩展中对应注册：
 - 中间：`Logistic Workspace` 空状态、居中聊天框、模型/权限/工具快捷入口。
 - 下方：物流工具区，优先单据制作和数据分析。
 - 右侧：文件浏览器侧栏。
+- 设置面板：模型配置（含测试连接）、系统提示词、外观、关于与更新。
 
 后续 UI 优先继续围绕「物流工作台」而不是通用聊天机器人扩展。
 
 ## 重要说明
 
-- Python sidecar 默认端口固定为 `127.0.0.1:8000`。
+- Python sidecar 默认端口固定为 `127.0.0.1:8000`，启动后通过 HTTP `/api/health` 健康检查。
 - Pi 由 Tauri 主进程启动，Python sidecar 不负责启动 Pi，避免多进程抢会话。
+- 窗口关闭时同时清理 Pi 和 sidecar 子进程，避免残留进程锁文件。
 - 本地模型/API Key 配置写入 `~/.pi/agent/model-config.json`，启动时注入进程环境变量。
 - 模板文件依赖在 `python-sidecar/tools/` 内部逻辑中，新增模板时优先保持工具函数纯输入/输出。
+- 打包后的 pi-runtime 解压到 `%LOCALAPPDATA%\ht-logistic\pi-runtime\`（用户可写，路径短）。
 
-更多接手细节见 [PROJECT_HANDOFF.md](./PROJECT_HANDOFF.md)。
+更多接手细节见 [PROJECT_HANDOFF.md](./PROJECT_HANDOFF.md) 和 [CODEX_SUMMARY.md](./CODEX_SUMMARY.md)。
