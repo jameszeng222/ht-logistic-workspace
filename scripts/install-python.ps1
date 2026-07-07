@@ -6,15 +6,15 @@
 #
 # What it does:
 #   1. Detect OS architecture (x64 / arm64)
-#   2. Check if a usable Python 3.11+ already exists — if yes, exit early
+#   2. Check if a usable Python 3.11+ already exists -- if yes, exit early
 #   3. Download Python 3.12 installer from python.org
 #   4. Install silently (per-user, no admin needed), add to PATH
 #   5. Verify installation
 #   6. Print next steps
 #
 # Why per-user install:
-#   Python 官方 installer 的 InstallAllUsers=0 装到 %LOCALAPPDATA%\Programs\Python\
-#   Python312，不需要管理员权限。配合 PrependPath=1 自动加到用户 PATH。
+#   Python official installer with InstallAllUsers=0 installs to %LOCALAPPDATA%\Programs\Python\Python312,
+#   no admin privileges needed. Combined with PrependPath=1 it auto-adds to user PATH.
 
 param(
     [string]$Version = "3.12.7"
@@ -178,7 +178,7 @@ if ($after -and $after.Tier -eq "stable") {
 } else {
     Write-Host ""
     Write-Host "WARNING: Install succeeded but Python not found in current PATH." -ForegroundColor Yellow
-    Write-Host "  This is normal — PATH refresh sometimes needs a new shell window." -ForegroundColor Yellow
+    Write-Host "  This is normal -- PATH refresh sometimes needs a new shell window." -ForegroundColor Yellow
     Write-Host "  Close PowerShell, reopen it, and try: python --version" -ForegroundColor Yellow
     Write-Host ""
 }

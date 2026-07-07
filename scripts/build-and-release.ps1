@@ -138,11 +138,11 @@ if ($SkipVersionBump) {
 
     # Commit the version bump so repo version stays in sync with built/released version.
     # Without this, local tauri.conf.json has the new version but remote doesn't,
-    # causing "版本对不上" confusion on next pull/build.
+    # causing version-mismatch confusion on next pull/build.
     # IMPORTANT: use -c user.name/email so commit works even without global git config
-    # (avoids "Committer identity unknown" error). Check exit code — if commit fails,
+    # (avoids "Committer identity unknown" error). Check exit code -- if commit fails,
     # the version bump is lost and remote will keep the old version, causing the
-    # "为什么版本号是0.1.1" problem (remote stuck at old version, each clone resets).
+    # stuck-at-old-version problem (remote keeps old version, each clone resets).
     & cmd /c "git add tauri-app/src-tauri/tauri.conf.json 2>&1" | Out-Null
     $commitOutput = & cmd /c "git -c user.name='trae-agent' -c user.email='agent@trae.local' commit -m `"chore: bump version to $newVersion`" 2>&1" | Out-String
     $commitExit = $LASTEXITCODE
@@ -249,7 +249,7 @@ try {
     # version field may be stale if tauri.conf.json had wrong version when Tauri
     # generated latest.json. Fix it instead of failing.
     if ($json.version -ne $newVersion) {
-        Write-Warn "latest.json version mismatch: expected $newVersion, got $($json.version) — will fix"
+        Write-Warn "latest.json version mismatch: expected $newVersion, got $($json.version) -- will fix"
         $json.version = $newVersion
     }
     if (-not $json.platforms.'windows-x86_64'.signature) {
@@ -280,7 +280,7 @@ try {
     #   Tauri generates latest.json with a signature, but if tauri.conf.json had a stale
     #   version, the signature in latest.json may be for a DIFFERENT build than the
     #   actual setup.exe. Always read signature from the .sig file that Tauri generated
-    #   alongside setup.exe — they are guaranteed to match because they're from the same
+    #   alongside setup.exe -- they are guaranteed to match because they're from the same
     #   build. The .sig file content IS the base64 signature to put in latest.json.
     $setupFileName = $setupExe.Name  # local filename, e.g. "HT Logistic Agent_0.1.3_x64-setup.exe"
     $githubAssetName = $setupFileName -replace ' ', '.'  # GitHub replaces spaces with dots
@@ -333,34 +333,35 @@ try {
 }
 
 # 4e. STRONG ASSERT: url and signature MUST match current build's version.
-#     防止"latest.json 指向旧版本 setup.exe"导致 404 或签名校验失败。
-#     之前 v0.1.5 release 上的 latest.json url 指向 0.1.1 的 setup.exe，
-#     signature 也是 0.1.1 的——因为 4c-fix 块没跑到或被绕过。
-#     这里做最终断言，不通过直接 exit 1，不让坏版本发布。
+#     Prevents "latest.json points to old version setup.exe" causing 404 or
+#     signature verification failure. Previously v0.1.5 release had latest.json
+#     url pointing to 0.1.1 setup.exe and 0.1.1 signature.
+#     Final assertion here: exit 1 if mismatch, do not allow bad release upload.
 $assertUrl = $json.platforms.'windows-x86_64'.url
 $assertSig = $json.platforms.'windows-x86_64'.signature
 if ($assertUrl -notmatch "v$newVersion/") {
-    Write-Err "ASSERT FAIL: url 不含当前版本 v$newVersion"
+    Write-Err "ASSERT FAIL: url does not contain current version v$newVersion"
     Write-Host "  url: $assertUrl" -ForegroundColor Gray
-    Write-Host "  期望 url 包含: /v$newVersion/" -ForegroundColor Yellow
-    Write-Err "禁止上传！latest.json url 指向了错误的版本，会导致 404 下载失败"
+    Write-Host "  expected url to contain: /v$newVersion/" -ForegroundColor Yellow
+    Write-Err "Upload blocked! latest.json url points to wrong version, will cause 404"
     exit 1
 }
 if ($assertUrl -notmatch "HT[\. ]Logistic[\. ]Agent[_\.]${newVersion}[_\.]x64-setup\.exe$") {
-    Write-Err "ASSERT FAIL: url 不含当前版本 $newVersion 的 setup.exe 文件名"
+    Write-Err "ASSERT FAIL: url does not contain current version $newVersion setup.exe filename"
     Write-Host "  url: $assertUrl" -ForegroundColor Gray
-    Write-Err "禁止上传！latest.json url 指向了错误版本的 setup.exe"
+    Write-Err "Upload blocked! latest.json url points to wrong version setup.exe"
     exit 1
 }
-# signature 解码后应包含当前版本号的 setup.exe 文件名（Tauri 签名格式: file:HT Logistic Agent_x.x.x_x64-setup.exe）
+# signature decoded should contain current version setup.exe filename
+# (Tauri signature format: file:HT Logistic Agent_x.x.x_x64-setup.exe)
 if ($sigText -notmatch "HT Logistic Agent_${newVersion}_x64-setup\.exe") {
-    Write-Err "ASSERT FAIL: signature 不含当前版本 $newVersion 的文件名"
-    Write-Host "  signature 解码内容: $sigText" -ForegroundColor Gray
-    Write-Host "  期望包含: HT Logistic Agent_${newVersion}_x64-setup.exe" -ForegroundColor Yellow
-    Write-Err "禁止上传！signature 是为错误版本的 setup.exe 签的，会导致签名校验失败"
+    Write-Err "ASSERT FAIL: signature does not contain current version $newVersion filename"
+    Write-Host "  signature decoded: $sigText" -ForegroundColor Gray
+    Write-Host "  expected to contain: HT Logistic Agent_${newVersion}_x64-setup.exe" -ForegroundColor Yellow
+    Write-Err "Upload blocked! signature is for wrong version setup.exe, will cause verification failure"
     exit 1
 }
-Write-OK "ASSERT PASS: url 和 signature 都匹配当前版本 v$newVersion"
+Write-OK "ASSERT PASS: url and signature both match current version v$newVersion"
 
 # ========== 5. Print upload checklist ==========
 
@@ -502,8 +503,9 @@ if ($openGitHub -ne 'n') {
 }
 
 # 5c. Push version bump commit to remote (so repo version stays in sync).
-#     自动 push — 构建和 release 都已成功，version bump 必须同步到远程，
-#     否则下次 clone 远程版本号落后，又 bump 到同一个版本号（卡在 0.1.4 问题）。
+#     Auto-push -- build and release both succeeded, version bump must sync to remote,
+#     otherwise next clone will have a stale remote version and bump to the same
+#     version number again (the stuck-at-0.1.4 problem).
 if (-not $SkipVersionBump) {
     Write-Host "Pushing version bump commit to remote..." -ForegroundColor Gray
     & cmd /c "git push origin main 2>&1" | Out-String | Write-Host

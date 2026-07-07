@@ -195,7 +195,7 @@ Write-Host "  pi.cmd launcher generated and validated" -ForegroundColor Gray
 
 # 2d. Clean up npm cache and non-runtime files to reduce size and avoid
 #     NSIS path-too-long errors (aws-sdk .d.ts paths exceed Windows MAX_PATH).
-#     Pi runs compiled .js via node.exe — .d.ts/.ts/.map/test files are dead weight.
+#     Pi runs compiled .js via node.exe -- .d.ts/.ts/.map/test files are dead weight.
 Remove-Item (Join-Path $piRuntimeDir "package.json") -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $piRuntimeDir "package-lock.json") -Force -ErrorAction SilentlyContinue
 
@@ -336,7 +336,7 @@ finally {
     Pop-Location
 }
 
-# 3b. Clean up src-tauri/pi-runtime — it's now embedded in the NSIS installer,
+# 3b. Clean up src-tauri/pi-runtime -- it's now embedded in the NSIS installer,
 #     no longer needed on disk. Removing it keeps the repo clean and avoids
 #     accidental commits of this large directory.
 #     Use robocopy mirror trick for long-path safety.
