@@ -466,20 +466,15 @@ if ($openGitHub -ne 'n') {
 }
 
 # 5c. Push version bump commit to remote (so repo version stays in sync).
-#     Ask before pushing — user may want to verify build first.
+#     自动 push — 构建和 release 都已成功，version bump 必须同步到远程，
+#     否则下次 clone 远程版本号落后，又 bump 到同一个版本号（卡在 0.1.4 问题）。
 if (-not $SkipVersionBump) {
-    $doPush = Read-Host "Push version bump commit to remote? (y/N)"
-    if ($doPush -eq 'y') {
-        Write-Host "Pushing version bump commit..." -ForegroundColor Gray
-        & cmd /c "git push origin main 2>&1" | Out-String | Write-Host
-        if ($LASTEXITCODE -eq 0) {
-            Write-OK "Version bump pushed. Repo now in sync with released v$newVersion."
-        } else {
-            Write-Warn "Push failed (exit $LASTEXITCODE). Push manually after upload: git push origin main"
-        }
+    Write-Host "Pushing version bump commit to remote..." -ForegroundColor Gray
+    & cmd /c "git push origin main 2>&1" | Out-String | Write-Host
+    if ($LASTEXITCODE -eq 0) {
+        Write-OK "Version bump pushed. Repo now in sync with released v$newVersion."
     } else {
-        Write-Host "  Skipped push. Remember to push manually:" -ForegroundColor Yellow
-        Write-Host "    git push origin main" -ForegroundColor Gray
+        Write-Warn "Push failed (exit $LASTEXITCODE). Push manually after upload: git push origin main"
     }
 }
 
