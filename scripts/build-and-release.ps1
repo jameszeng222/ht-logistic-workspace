@@ -265,34 +265,51 @@ try {
     Write-OK "  signature length: $($json.platforms.'windows-x86_64'.signature.Length)"
     Write-OK "  url (before fix): $($json.platforms.'windows-x86_64'.url)"
 
-    # 4c-fix. Rewrite the url field to fix three issues that cause 404 download errors:
-    #   1. Tauri's default url uses productName with SPACES ("HT Logistic Agent_0.1.x_x64-setup.exe")
-    #      matching the local filename. But when uploaded to GitHub Release, GitHub
-    #      REPLACES spaces with dots ("HT.Logistic.Agent_0.1.x_x64-setup.exe"). The url
-    #      must use the GitHub asset name (dots), not the local filename (spaces).
-    #   2. Tauri's default url may reference the WRONG version (e.g. "0.1.1" when we're
-    #      building 0.1.3) if version bump commit failed and tauri.conf.json had a stale
-    #      version when Tauri read it.
-    #   3. Tauri's default url uses "/releases/latest/download/" which only works for the
-    #      release GitHub marks as "latest" — may not be the current build. Use the
-    #      version-specific URL "/releases/download/v{version}/" instead.
+    # 4c-fix. Rewrite url AND signature fields to fix multiple issues:
     #
-    # Build the correct url: repo + tag v{version} + GitHub asset name (spaces->dots).
+    # url issues (causes 404 download):
+    #   1. Tauri's default url uses productName with SPACES matching the local filename.
+    #      But GitHub REPLACES spaces with dots when uploading release assets.
+    #      url must use GitHub asset name (dots), not local filename (spaces).
+    #   2. Tauri's default url may reference the WRONG version if version bump commit
+    #      failed and tauri.conf.json had a stale version when Tauri read it.
+    #   3. Tauri's default url uses "/releases/latest/download/" which only works for
+    #      the release GitHub marks as "latest". Use version-specific URL instead.
+    #
+    # signature issue (causes "signature verification failed"):
+    #   Tauri generates latest.json with a signature, but if tauri.conf.json had a stale
+    #   version, the signature in latest.json may be for a DIFFERENT build than the
+    #   actual setup.exe. Always read signature from the .sig file that Tauri generated
+    #   alongside setup.exe — they are guaranteed to match because they're from the same
+    #   build. The .sig file content IS the base64 signature to put in latest.json.
     $setupFileName = $setupExe.Name  # local filename, e.g. "HT Logistic Agent_0.1.3_x64-setup.exe"
     $githubAssetName = $setupFileName -replace ' ', '.'  # GitHub replaces spaces with dots
     $correctUrl = "https://github.com/jameszeng222/ht-logistic-workspace/releases/download/v$newVersion/$githubAssetName"
+
+    # Read signature from .sig file (guaranteed to match this build's setup.exe)
+    $sigFromFile = [System.IO.File]::ReadAllText($setupSig).Trim()
+
+    $needFix = $false
     if ($json.platforms.'windows-x86_64'.url -ne $correctUrl) {
-        Write-Warn "url field needs fix (version mismatch or missing URL-encoding):"
+        Write-Warn "url field needs fix:"
         Write-Host "    old: $($json.platforms.'windows-x86_64'.url)" -ForegroundColor Gray
         Write-Host "    new: $correctUrl" -ForegroundColor Green
         $json.platforms.'windows-x86_64'.url = $correctUrl
-        # Write back as no-BOM UTF-8 (Set-Content with -Encoding UTF8 writes BOM,
-        # which breaks Tauri updater's JSON parser). Use UTF8Encoding($false).
+        $needFix = $true
+    }
+    if ($json.platforms.'windows-x86_64'.signature -ne $sigFromFile) {
+        Write-Warn "signature field needs fix (latest.json had stale signature):"
+        Write-Host "    old: $($json.platforms.'windows-x86_64'.signature.Substring(0, [Math]::Min(80, $json.platforms.'windows-x86_64'.signature.Length)))..." -ForegroundColor Gray
+        Write-Host "    new: $($sigFromFile.Substring(0, [Math]::Min(80, $sigFromFile.Length)))..." -ForegroundColor Green
+        $json.platforms.'windows-x86_64'.signature = $sigFromFile
+        $needFix = $true
+    }
+    if ($needFix) {
         $fixedJson = $json | ConvertTo-Json -Depth 10
         [System.IO.File]::WriteAllText($latestJsonPath, $fixedJson, [System.Text.UTF8Encoding]::new($false))
-        Write-OK "latest.json url fixed and saved (no BOM)"
+        Write-OK "latest.json url+signature fixed and saved (no BOM)"
     } else {
-        Write-OK "url field already correct"
+        Write-OK "url and signature fields already correct"
     }
 } catch {
     Write-Err "latest.json JSON parse failed: $_"
