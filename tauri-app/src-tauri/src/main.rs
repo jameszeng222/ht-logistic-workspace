@@ -1092,6 +1092,10 @@ fn get_model_config_path() -> Result<std::path::PathBuf, String> {
 }
 
 /// 读取模型配置
+///
+/// 老用户的配置文件已存在，直接读会拿到旧模型列表（如 deepseek-chat）。
+/// 这里做迁移合并：用默认配置的 models/base_url 覆盖（provider 级别，非用户数据），
+/// 但保留用户的 api_key/enabled/default_model。新 provider 自动补上。
 #[tauri::command]
 async fn get_model_config() -> Result<serde_json::Value, String> {
     let path = get_model_config_path()?;
@@ -1100,8 +1104,32 @@ async fn get_model_config() -> Result<serde_json::Value, String> {
         return Ok(serde_json::to_value(&default).map_err(|e| e.to_string())?);
     }
     let content = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败：{e}"))?;
-    let config: ModelConfig = serde_json::from_str(&content).unwrap_or_else(|_| ModelConfig::default());
-    Ok(serde_json::to_value(&config).map_err(|e| e.to_string())?)
+    let mut saved: ModelConfig = serde_json::from_str(&content).unwrap_or_else(|_| ModelConfig::default());
+
+    // 迁移：用默认 provider 列表升级 models/base_url，保留用户的 api_key/enabled/default_model
+    let defaults = ModelConfig::default();
+    for default_pv in &defaults.providers {
+        if let Some(saved_pv) = saved.providers.iter_mut().find(|p| p.id == default_pv.id) {
+            // provider 级别字段用默认值覆盖（这些会随版本更新）
+            saved_pv.models = default_pv.models.clone();
+            saved_pv.base_url = default_pv.base_url.clone();
+            saved_pv.name = default_pv.name.clone();
+            // default_model：如果用户选的旧模型不在新列表里，换成新默认
+            if let Some(ref dm) = saved_pv.default_model {
+                if !saved_pv.models.iter().any(|m| m == dm) {
+                    saved_pv.default_model = default_pv.default_model.clone();
+                }
+            } else {
+                saved_pv.default_model = default_pv.default_model.clone();
+            }
+            // api_key / enabled 保留用户设置，不动
+        } else {
+            // 默认里有但保存的没有 → 新 provider，补上
+            saved.providers.push(default_pv.clone());
+        }
+    }
+
+    Ok(serde_json::to_value(&saved).map_err(|e| e.to_string())?)
 }
 
 /// 保存模型配置
