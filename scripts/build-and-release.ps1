@@ -386,7 +386,7 @@ Write-Host ""
 $filesToUpload = @(
     @{ Path = $setupExe.FullName; Desc = "Installer" },
     @{ Path = $setupSig; Desc = "Signature" },
-    @{ Path = $latestJsonPath; Desc = "Manifest" }
+    @{ Path = $latestJsonPath; Desc = "Updater manifest" }
 )
 
 foreach ($f in $filesToUpload) {
@@ -428,6 +428,17 @@ if ($ghAvailable) {
             $setupExePath = $filesToUpload | Where-Object { $_.Desc -eq "Installer" } | Select-Object -ExpandProperty Path
             $sigPath = $filesToUpload | Where-Object { $_.Desc -eq "Signature" } | Select-Object -ExpandProperty Path
             $jsonPath = $filesToUpload | Where-Object { $_.Desc -eq "Updater manifest" } | Select-Object -ExpandProperty Path
+
+            # Guard: if any path is empty (Desc mismatch regression), gh release create
+            # would silently upload fewer files and client update would 404.
+            if (-not $setupExePath -or -not $sigPath -or -not $jsonPath) {
+                Write-Err "Internal error: file path missing before gh release create"
+                Write-Host "  Installer path:        $setupExePath" -ForegroundColor Gray
+                Write-Host "  Signature path:        $sigPath" -ForegroundColor Gray
+                Write-Host "  Updater manifest path: $jsonPath" -ForegroundColor Gray
+                Write-Err "Check $filesToUpload Desc fields match the Where-Object filters above."
+                exit 1
+            }
 
             # Check if release already exists, delete if so (to allow re-upload)
             $existingRelease = (& cmd /c 'gh release view {0} 2>&1' -f "v$newVersion") | Out-String
