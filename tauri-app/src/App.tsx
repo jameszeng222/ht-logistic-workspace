@@ -1857,7 +1857,7 @@ export default function App() {
                               />
                             </div>
                             <div className="model-config-field">
-                              <label className="model-config-label">默认模型</label>
+                              <label className="model-config-label">测试连接模型</label>
                               <select
                                 className="model-config-select"
                                 value={provider.defaultModel || ""}

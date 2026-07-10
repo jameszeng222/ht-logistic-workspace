@@ -1078,6 +1078,33 @@ impl Default for ModelConfig {
                     default_model: Some("anthropic/claude-sonnet-4.5".into()),
                     enabled: false,
                 },
+                ModelProvider {
+                    id: "siliconflow".into(),
+                    name: "硅基流动".into(),
+                    api_key: String::new(),
+                    // 硅基流动兼容 OpenAI 接口，base_url 为 https://api.siliconflow.cn/v1
+                    base_url: Some("https://api.siliconflow.cn/v1".into()),
+                    // 主流模型：DeepSeek V4 系列、GLM-5.1、Kimi K2.6、Qwen3 旗舰
+                    models: vec![
+                        "deepseek-ai/DeepSeek-V4-Flash".into(),
+                        "deepseek-ai/DeepSeek-V4-Pro".into(),
+                        "zai-org/GLM-5.1".into(),
+                        "moonshotai/Kimi-K2.6".into(),
+                        "Qwen/Qwen3-235B-A22B-Instruct".into(),
+                    ],
+                    default_model: Some("deepseek-ai/DeepSeek-V4-Flash".into()),
+                    enabled: false,
+                },
+                ModelProvider {
+                    id: "custom".into(),
+                    name: "自定义地址".into(),
+                    api_key: String::new(),
+                    // base_url 和 models 留空，由用户在设置页填写
+                    base_url: None,
+                    models: vec![],
+                    default_model: None,
+                    enabled: false,
+                },
             ],
             default_provider: None,
             default_model: None,
@@ -1166,8 +1193,14 @@ async fn apply_model_config() -> Result<String, String> {
             "deepseek" => "DEEPSEEK_API_KEY",
             "google" | "gemini" => "GOOGLE_API_KEY",
             "openrouter" => "OPENROUTER_API_KEY",
+            "siliconflow" => "SILICONFLOW_API_KEY",
             "mistral" => "MISTRAL_API_KEY",
             "groq" => "GROQ_API_KEY",
+            "custom" => {
+                // 自定义地址：用 OPENAI_API_KEY + OPENAI_BASE_URL 注入，让 Pi 当作
+                // OpenAI 兼容端点使用。用户在设置页填的 base_url 必须是 OpenAI 兼容格式。
+                "OPENAI_API_KEY"
+            }
             _ => continue,
         };
         std::env::set_var(env_name, &provider.api_key);
@@ -1175,7 +1208,13 @@ async fn apply_model_config() -> Result<String, String> {
 
         // 如果有 base_url，也设置对应的环境变量（如果 Pi 支持的话）
         if let Some(base_url) = &provider.base_url {
-            let base_env = format!("{}_BASE_URL", provider.id.to_uppercase());
+            // custom provider 的 base_url 必须设成 OPENAI_BASE_URL，
+            // 让 Pi 把它当 OpenAI 兼容端点用；其他 provider 用各自的标准变量名。
+            let base_env = if provider.id == "custom" {
+                "OPENAI_BASE_URL".to_string()
+            } else {
+                format!("{}_BASE_URL", provider.id.to_uppercase())
+            };
             std::env::set_var(&base_env, base_url);
         }
     }
@@ -1207,15 +1246,27 @@ fn apply_model_config_sync() -> Result<String, String> {
             "deepseek" => "DEEPSEEK_API_KEY",
             "google" | "gemini" => "GOOGLE_API_KEY",
             "openrouter" => "OPENROUTER_API_KEY",
+            "siliconflow" => "SILICONFLOW_API_KEY",
             "mistral" => "MISTRAL_API_KEY",
             "groq" => "GROQ_API_KEY",
+            "custom" => {
+                // 自定义地址：用 OPENAI_API_KEY + OPENAI_BASE_URL 注入，让 Pi 当作
+                // OpenAI 兼容端点使用。用户在设置页填的 base_url 必须是 OpenAI 兼容格式。
+                "OPENAI_API_KEY"
+            }
             _ => continue,
         };
         std::env::set_var(env_name, &provider.api_key);
         applied.push(provider.name.clone());
 
         if let Some(base_url) = &provider.base_url {
-            let base_env = format!("{}_BASE_URL", provider.id.to_uppercase());
+            // custom provider 的 base_url 必须设成 OPENAI_BASE_URL，
+            // 让 Pi 把它当 OpenAI 兼容端点用；其他 provider 用各自的标准变量名。
+            let base_env = if provider.id == "custom" {
+                "OPENAI_BASE_URL".to_string()
+            } else {
+                format!("{}_BASE_URL", provider.id.to_uppercase())
+            };
             std::env::set_var(&base_env, base_url);
         }
     }
@@ -1324,6 +1375,37 @@ async fn test_model_connection(provider_id: String, api_key: String, base_url: O
             let base = base_url.as_deref().unwrap_or("https://api.groq.com/openai");
             let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
             let model_name = model.as_deref().unwrap_or("llama-3.3-70b-versatile");
+            let body = serde_json::json!({
+                "model": model_name,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}]
+            });
+            (url, "openai", body)
+        }
+        "siliconflow" => {
+            // 硅基流动：OpenAI 兼容，base_url 为 https://api.siliconflow.cn/v1
+            let base = base_url.as_deref().unwrap_or("https://api.siliconflow.cn/v1");
+            let url = format!("{}/chat/completions", base.trim_end_matches('/'));
+            let model_name = model.as_deref().unwrap_or("deepseek-ai/DeepSeek-V4-Flash");
+            let body = serde_json::json!({
+                "model": model_name,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}]
+            });
+            (url, "openai", body)
+        }
+        "custom" => {
+            // 自定义地址：用户必须填 base_url 和 model，按 OpenAI 兼容格式请求。
+            // base_url 应包含到 /v1 或等价路径，拼 /chat/completions。
+            let base = match base_url.as_deref() {
+                Some(b) if !b.trim().is_empty() => b.trim_end_matches('/'),
+                _ => return Err("自定义地址必须填写 Base URL".into()),
+            };
+            let model_name = match model {
+                Some(m) if !m.trim().is_empty() => m,
+                _ => return Err("自定义地址必须选择测试连接模型".into()),
+            };
+            let url = format!("{}/chat/completions", base);
             let body = serde_json::json!({
                 "model": model_name,
                 "max_tokens": 1,
