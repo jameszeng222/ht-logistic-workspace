@@ -1231,6 +1231,20 @@ export default function App() {
     return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [filteredSessions]);
 
+  // 聊天框模型下拉框只显示已配置 API Key 且启用的 provider 的模型。
+  // Pi 的 get_available_models 返回所有它认识的模型（不管有没有 key），
+  // 不过滤会导致下拉框一堆模型选了也没用（发消息会失败）。
+  const visibleModels = useMemo(() => {
+    if (!modelConfig) return models;
+    const configuredIds = new Set(
+      modelConfig.providers
+        .filter((p) => p.enabled && p.apiKey.trim())
+        .map((p) => p.id.toLowerCase())
+    );
+    if (configuredIds.size === 0) return [];
+    return models.filter((m) => configuredIds.has(m.provider.toLowerCase()));
+  }, [models, modelConfig]);
+
   return (
     <div className="app">
       {/* ============ 顶栏 ============ */}
@@ -1621,9 +1635,9 @@ export default function App() {
                     style={{ left: dropdownPos.left, bottom: dropdownPos.bottom, minWidth: dropdownPos.width }}
                   >
                     {showModelDropdown && (
-                      models.length === 0 ? (
-                        <div className="model-dropdown-empty">未找到可用模型，请先配置 API Key</div>
-                      ) : models.map((m) => (
+                      visibleModels.length === 0 ? (
+                        <div className="model-dropdown-empty">未找到可用模型，请在设置里配置并启用 API Key</div>
+                      ) : visibleModels.map((m) => (
                         <button
                           type="button"
                           key={`${m.provider}/${m.id}`}
@@ -1869,11 +1883,12 @@ export default function App() {
                               </select>
                             </div>
                             <div className="model-config-field">
-                              <label className="model-config-label">可用模型（每行一个）</label>
+                              <label className="model-config-label">可用模型（每行一个，可直接输入任意模型名）</label>
                               <textarea
                                 className="model-config-textarea"
                                 value={provider.models.join("\n")}
-                                rows={3}
+                                rows={4}
+                                placeholder={"每行输入一个模型名，可直接添加官方列表之外的模型\n例如：\ndeepseek-ai/DeepSeek-V4-Flash\nPro/deepseek-ai/DeepSeek-V3.1\nQwen/Qwen3-30B-A3B"}
                                 onChange={(e) => updateProvider(provider.id, { models: e.target.value.split("\n").filter((s) => s.trim()) })}
                               />
                             </div>
