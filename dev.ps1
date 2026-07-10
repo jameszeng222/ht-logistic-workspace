@@ -32,6 +32,20 @@ if (-not (Test-Path $venvPython)) {
     exit 1
 }
 
+# ============ Ensure pi-runtime.7z placeholder exists (dev mode) ============
+# tauri.conf.json declares "pi-runtime.7z" as a resource, so Tauri's build
+# script checks the file exists at compile time. In dev mode the real 7z is
+# not built (only build-installer.ps1 creates it), so we create a 1-byte
+# placeholder. At runtime, ensure_pi_runtime_extracted() tries to extract it,
+# fails gracefully (returns None), and find_pi() falls through to dev-mode
+# paths (current_exe parents / cwd / PATH) where the real pi-runtime lives.
+$pi7z = Join-Path $TauriDir "src-tauri\pi-runtime.7z"
+if (-not (Test-Path $pi7z)) {
+    Write-Host "[0/3] Creating pi-runtime.7z placeholder for dev mode ..." -ForegroundColor Yellow
+    [System.IO.File]::WriteAllBytes($pi7z, [byte[]](0))
+    Write-Host "OK: placeholder created (real 7z built only by build-installer.ps1)" -ForegroundColor Green
+}
+
 # ============ Start sidecar (background) ============
 Write-Host "[1/3] Starting Python sidecar (background, port 8000) ..." -ForegroundColor Yellow
 $sidecarJob = Start-Process -FilePath $venvPython `
