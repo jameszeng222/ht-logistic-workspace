@@ -312,12 +312,23 @@ export default function App() {
         default_model: modelConfig.defaultModel || null,
       };
       await invoke("save_model_config", { config: data });
-      // 应用到环境变量
+      // 应用到环境变量（注入到 Tauri 主进程 env，供下次 spawn 的 Pi 子进程继承）
       const result = await invoke<string>("apply_model_config");
       setModelConfigDirty(false);
       toast(`模型配置已保存。${result}`, "success");
-      // 刷新可用模型列表
-      refreshModels();
+      // API Key 是 Pi 子进程启动时从环境变量读取的，运行中的 Pi 不会感知 env 变化。
+      // 必须重启 Pi 子进程让它读到新注入的 key，否则 get_available_models 仍返回空，
+      // 聊天框显示"未找到可用模型"。这与保存 SYSTEM.md 后重启 Pi 是同一原因。
+      try {
+        await invoke("restart_pi", { cwd: workdirRef.current.trim() || null, sessionPath: null });
+        setReady(true);
+        // 重启后刷新模型列表和状态，让下拉框立即显示新可用模型
+        await refreshModels();
+        await refreshState();
+        toast("Pi 已重启以加载新的 API Key。", "success");
+      } catch (e) {
+        toast(`Pi 重启失败（API Key 已注入，重启 App 后生效）: ${e}`, "error");
+      }
     } catch (e) {
       toast(`保存失败: ${e}`, "error");
     } finally {
