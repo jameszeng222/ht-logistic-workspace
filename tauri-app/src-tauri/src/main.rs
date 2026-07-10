@@ -1199,14 +1199,13 @@ async fn apply_model_config() -> Result<String, String> {
             "deepseek" => "DEEPSEEK_API_KEY",
             "google" | "gemini" => "GOOGLE_API_KEY",
             "openrouter" => "OPENROUTER_API_KEY",
-            "siliconflow" => "SILICONFLOW_API_KEY",
             "mistral" => "MISTRAL_API_KEY",
             "groq" => "GROQ_API_KEY",
-            "custom" => {
-                // 自定义地址：用 OPENAI_API_KEY + OPENAI_BASE_URL 注入，让 Pi 当作
-                // OpenAI 兼容端点使用。用户在设置页填的 base_url 必须是 OpenAI 兼容格式。
-                "OPENAI_API_KEY"
-            }
+            // siliconflow 和 custom 都是 OpenAI 兼容端点，Pi 没有 siliconflow provider，
+            // 必须注入 OPENAI_API_KEY + OPENAI_BASE_URL 让 Pi 的 OpenAI provider 指向它们。
+            // 注意：若同时启用了原生 openai provider，后处理的 siliconflow/custom 会覆盖
+            // OPENAI_API_KEY 和 OPENAI_BASE_URL，用户应只启用其中一个。
+            "siliconflow" | "custom" => "OPENAI_API_KEY",
             _ => continue,
         };
         std::env::set_var(env_name, &provider.api_key);
@@ -1214,9 +1213,9 @@ async fn apply_model_config() -> Result<String, String> {
 
         // 如果有 base_url，也设置对应的环境变量（如果 Pi 支持的话）
         if let Some(base_url) = &provider.base_url {
-            // custom provider 的 base_url 必须设成 OPENAI_BASE_URL，
+            // siliconflow / custom 的 base_url 必须设成 OPENAI_BASE_URL，
             // 让 Pi 把它当 OpenAI 兼容端点用；其他 provider 用各自的标准变量名。
-            let base_env = if provider.id == "custom" {
+            let base_env = if provider.id == "custom" || provider.id == "siliconflow" {
                 "OPENAI_BASE_URL".to_string()
             } else {
                 format!("{}_BASE_URL", provider.id.to_uppercase())
@@ -1252,23 +1251,22 @@ fn apply_model_config_sync() -> Result<String, String> {
             "deepseek" => "DEEPSEEK_API_KEY",
             "google" | "gemini" => "GOOGLE_API_KEY",
             "openrouter" => "OPENROUTER_API_KEY",
-            "siliconflow" => "SILICONFLOW_API_KEY",
             "mistral" => "MISTRAL_API_KEY",
             "groq" => "GROQ_API_KEY",
-            "custom" => {
-                // 自定义地址：用 OPENAI_API_KEY + OPENAI_BASE_URL 注入，让 Pi 当作
-                // OpenAI 兼容端点使用。用户在设置页填的 base_url 必须是 OpenAI 兼容格式。
-                "OPENAI_API_KEY"
-            }
+            // siliconflow 和 custom 都是 OpenAI 兼容端点，Pi 没有 siliconflow provider，
+            // 必须注入 OPENAI_API_KEY + OPENAI_BASE_URL 让 Pi 的 OpenAI provider 指向它们。
+            // 注意：若同时启用了原生 openai provider，后处理的 siliconflow/custom 会覆盖
+            // OPENAI_API_KEY 和 OPENAI_BASE_URL，用户应只启用其中一个。
+            "siliconflow" | "custom" => "OPENAI_API_KEY",
             _ => continue,
         };
         std::env::set_var(env_name, &provider.api_key);
         applied.push(provider.name.clone());
 
         if let Some(base_url) = &provider.base_url {
-            // custom provider 的 base_url 必须设成 OPENAI_BASE_URL，
+            // siliconflow / custom 的 base_url 必须设成 OPENAI_BASE_URL，
             // 让 Pi 把它当 OpenAI 兼容端点用；其他 provider 用各自的标准变量名。
-            let base_env = if provider.id == "custom" {
+            let base_env = if provider.id == "custom" || provider.id == "siliconflow" {
                 "OPENAI_BASE_URL".to_string()
             } else {
                 format!("{}_BASE_URL", provider.id.to_uppercase())
