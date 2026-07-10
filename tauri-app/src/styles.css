@@ -802,10 +802,10 @@ body {
 }
 
 /* Turn */
-.turn { display: flex; flex-direction: column; gap: var(--space-4); }
+.turn { display: flex; flex-direction: column; gap: var(--space-2); }
 
 /* 消息：AI 左侧带头像/标签，用户右侧无头像 */
-.msg { display: flex; gap: var(--space-3); align-items: flex-start; }
+.msg { display: flex; gap: var(--space-2); align-items: flex-start; }
 .msg.user { flex-direction: row-reverse; }
 .msg-author {
   display: inline-flex; align-items: center; gap: var(--space-2);
@@ -822,17 +822,17 @@ body {
 }
 .msg-author .author-name { font-size: 10px; font-weight: 500; }
 .msg-content {
-  display: flex; flex-direction: column; gap: var(--space-2);
+  display: flex; flex-direction: column; gap: var(--space-1);
   min-width: 0;
-  max-width: calc(100% - 44px - var(--space-3));
+  max-width: calc(100% - 44px - var(--space-2));
 }
 .msg.user .msg-content { align-items: flex-end; }
 /* 用户气泡限宽 75%，避免长消息撑满整行 */
 .msg.user .msg-content { max-width: 75%; }
 .msg-bubble {
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius);
-  font-size: var(--text-base); line-height: var(--leading-normal);
+  font-size: var(--text-base); line-height: 1.45;
   word-wrap: break-word; overflow-wrap: break-word; white-space: pre-wrap;
 }
 .user-bubble {
@@ -846,7 +846,7 @@ body {
   border: 0;
   color: var(--fg);
   box-shadow: none;
-  padding: var(--space-1) 0;
+  padding: 2px 0;
 }
 .msg.assistant.streaming .assistant-bubble { border-color: var(--border-strong); }
 
@@ -1448,21 +1448,21 @@ body {
 }
 
 /* ============ Markdown 渲染 ============ */
-.markdown { font-size: var(--text-base); line-height: 1.55; color: var(--fg); }
+.markdown { font-size: var(--text-base); line-height: 1.45; color: var(--fg); }
 .markdown > *:first-child { margin-top: 0; }
 .markdown > *:last-child { margin-bottom: 0; }
-/* 段落间距收紧：上下 4px，避免一句话后空一两行的稀疏感 */
-.markdown p { margin: var(--space-1) 0; }
+/* 段落间距收紧：上下 2px，避免一句话后空一两行的稀疏感 */
+.markdown p { margin: 2px 0; }
 .markdown h1, .markdown h2, .markdown h3, .markdown h4 {
-  margin: var(--space-3) 0 var(--space-1); font-weight: 600;
+  margin: var(--space-2) 0 2px; font-weight: 600;
   line-height: var(--leading-tight); letter-spacing: -0.01em;
 }
 .markdown h1 { font-size: var(--text-xl); }
 .markdown h2 { font-size: var(--text-lg); }
 .markdown h3 { font-size: var(--text-md); }
 .markdown h4 { font-size: var(--text-base); }
-.markdown ul, .markdown ol { margin: var(--space-1) 0; padding-left: var(--space-6); }
-.markdown li { margin: 2px 0; }
+.markdown ul, .markdown ol { margin: 2px 0; padding-left: var(--space-5); }
+.markdown li { margin: 1px 0; }
 .markdown ul li::marker { color: var(--fg-muted); }
 .markdown a {
   color: var(--primary); text-decoration: none;
@@ -1487,7 +1487,7 @@ body {
 
 /* 代码块 */
 .md-code-block {
-  margin: var(--space-3) 0; border: 1px solid var(--border);
+  margin: var(--space-2) 0; border: 1px solid var(--border);
   border-radius: var(--radius-md); overflow: hidden; background: var(--bg);
 }
 .md-code-head {

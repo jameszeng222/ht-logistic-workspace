@@ -1133,14 +1133,20 @@ async fn get_model_config() -> Result<serde_json::Value, String> {
     let content = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败：{e}"))?;
     let mut saved: ModelConfig = serde_json::from_str(&content).unwrap_or_else(|_| ModelConfig::default());
 
-    // 迁移：用默认 provider 列表升级 models/base_url，保留用户的 api_key/enabled/default_model
+    // 迁移：用默认 provider 列表升级 base_url/name，合并 models（保留用户额外添加的）
     let defaults = ModelConfig::default();
     for default_pv in &defaults.providers {
         if let Some(saved_pv) = saved.providers.iter_mut().find(|p| p.id == default_pv.id) {
-            // provider 级别字段用默认值覆盖（这些会随版本更新）
-            saved_pv.models = default_pv.models.clone();
+            // base_url / name 用默认值覆盖（这些随版本更新）
             saved_pv.base_url = default_pv.base_url.clone();
             saved_pv.name = default_pv.name.clone();
+            // models：合并而非覆盖。默认列表里的模型补上（用户删了的也补回），
+            // 用户额外添加的模型（如 DeepSeek-V3.2）保留。
+            for dm in &default_pv.models {
+                if !saved_pv.models.iter().any(|m| m == dm) {
+                    saved_pv.models.push(dm.clone());
+                }
+            }
             // default_model：如果用户选的旧模型不在新列表里，换成新默认
             if let Some(ref dm) = saved_pv.default_model {
                 if !saved_pv.models.iter().any(|m| m == dm) {

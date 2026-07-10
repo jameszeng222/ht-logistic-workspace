@@ -675,6 +675,7 @@ export default function App() {
   const refreshSessionsRef = useRef(refreshSessions); refreshSessionsRef.current = refreshSessions;
   const refreshEnvKeysRef = useRef(refreshEnvKeys); refreshEnvKeysRef.current = refreshEnvKeys;
   const loadHistoryRef = useRef(loadHistory); loadHistoryRef.current = loadHistory;
+  const loadModelConfigRef = useRef(loadModelConfig); loadModelConfigRef.current = loadModelConfig;
   // 读取当前 app 版本号（供设置页"关于与更新"显示）
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion("unknown"));
@@ -701,6 +702,7 @@ export default function App() {
         addLogRef.current("event", "app_init · Pi 已连接");
         refreshStateRef.current(); refreshModelsRef.current(); refreshSessionsRef.current(); refreshEnvKeysRef.current();
         loadHistoryRef.current();
+        loadModelConfigRef.current();
       } catch (e) {
         if (!cancelled) {
           toastRef.current(`启动失败: ${e}`, "error");
