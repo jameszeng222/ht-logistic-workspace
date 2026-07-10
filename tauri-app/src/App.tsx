@@ -1232,17 +1232,60 @@ export default function App() {
   }, [filteredSessions]);
 
   // 聊天框模型下拉框只显示已配置 API Key 且启用的 provider 的模型。
-  // Pi 的 get_available_models 返回所有它认识的模型（不管有没有 key），
-  // 不过滤会导致下拉框一堆模型选了也没用（发消息会失败）。
+  //
+  // 模型来源：
+  //   1. Pi 原生认识的 provider（Anthropic/OpenAI/DeepSeek/Google/OpenRouter 等）：
+  //      从 Pi 的 get_available_models 返回值里筛，provider 名大小写归一化后匹配。
+  //   2. 用户在设置页填的模型列表（所有已配置 provider）：
+  //      Pi 可能没返回某些模型（如 deepseek-v4-flash 太新、硅基流动 Pi 根本不认识），
+  //      用设置页的 models 列表补齐。provider 字段按规则映射：
+  //        - Pi 原生 provider：用 Pi 的 provider 名（如 "DeepSeek"）
+  //        - Pi 不认识的 provider（siliconflow/custom）：填 "OpenAI"，
+  //          因为注入的是 OPENAI_API_KEY+OPENAI_BASE_URL，Pi 当 OpenAI 兼容端点用。
+  const PI_NATIVE_PROVIDERS = new Set(["anthropic", "openai", "deepseek", "google", "gemini", "openrouter", "mistral", "groq", "azure", "azure openai"]);
+  const PI_PROVIDER_DISPLAY: Record<string, string> = {
+    anthropic: "Anthropic", openai: "OpenAI", deepseek: "DeepSeek",
+    google: "Google", gemini: "Gemini", openrouter: "OpenRouter",
+    mistral: "Mistral", groq: "Groq",
+  };
   const visibleModels = useMemo(() => {
     if (!modelConfig) return models;
-    const configuredIds = new Set(
-      modelConfig.providers
-        .filter((p) => p.enabled && p.apiKey.trim())
+    const configured = modelConfig.providers.filter((p) => p.enabled && p.apiKey.trim());
+    if (configured.length === 0) return [];
+
+    // 1. Pi 原生 provider：从 Pi 返回的模型列表里筛
+    const nativeIds = new Set(
+      configured
+        .filter((p) => PI_NATIVE_PROVIDERS.has(p.id.toLowerCase()))
         .map((p) => p.id.toLowerCase())
     );
-    if (configuredIds.size === 0) return [];
-    return models.filter((m) => configuredIds.has(m.provider.toLowerCase()));
+    const fromPi = nativeIds.size > 0
+      ? models.filter((m) => nativeIds.has(m.provider.toLowerCase()))
+      : [];
+
+    // 2. 用户设置页填的模型列表补齐（Pi 没返回的）
+    const fromConfig = configured.flatMap((p) => {
+      const isNative = PI_NATIVE_PROVIDERS.has(p.id.toLowerCase());
+      // provider 名：原生用 Pi 的显示名，非原生（siliconflow/custom）用 OpenAI
+      const providerName = isNative
+        ? (PI_PROVIDER_DISPLAY[p.id.toLowerCase()] || p.id)
+        : "OpenAI";
+      return p.models.map((modelId) => ({
+        id: modelId,
+        name: modelId,
+        provider: providerName,
+      } as ModelInfo));
+    });
+
+    // 去重（Pi 返回的和设置页合成的可能有重叠，按 provider/id 去重）
+    const seen = new Set<string>();
+    const merged = [...fromPi, ...fromConfig].filter((m) => {
+      const key = `${m.provider.toLowerCase()}/${m.id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return merged;
   }, [models, modelConfig]);
 
   return (
