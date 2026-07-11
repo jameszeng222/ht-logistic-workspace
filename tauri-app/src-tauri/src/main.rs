@@ -585,8 +585,11 @@ async fn send_request(
     let id = state.next_request_id.fetch_add(1, Ordering::SeqCst);
     let mut cmd = command;
     // command 必须是 JSON 对象才能写入 id 用于响应路由；非对象直接报错，避免注册了 channel 却收不到响应而空等 10s
-    let obj = cmd.as_object_mut().ok_or_else(|| "command 必须是 JSON 对象".to_string())?;
-    obj.insert("id".into(), serde_json::json!(id));
+    let cmd_type = {
+        let obj = cmd.as_object_mut().ok_or_else(|| "command 必须是 JSON 对象".to_string())?;
+        obj.insert("id".into(), serde_json::json!(id));
+        obj.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string()
+    };
 
     let (tx, rx) = oneshot::channel();
     state.response_channels.lock().unwrap().insert(id, tx);
@@ -606,7 +609,6 @@ async fn send_request(
     // set_model 切换模型时 Pi 可能需要初始化 API client 并验证连接，
     // 特别是 OpenAI 兼容端点（硅基流动/自定义地址），10s 不够，给 30s。
     // 其他命令（get_state 等）保持 10s。
-    let cmd_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
     let timeout_secs = if cmd_type == "set_model" { 30 } else { 10 };
 
     match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx).await {
