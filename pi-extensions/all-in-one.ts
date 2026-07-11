@@ -563,4 +563,37 @@ export default function (pi: ExtensionAPI) {
       };
     },
   });
+
+  // HS 编码查询：无需上传文件，GET 请求，输入编码或品名关键词。
+  // 与其他物流工具的区别：这是查询型工具（输入→返回结构化数据），
+  // 不是文件处理型工具（上传文件→返回文件）。
+  // AI 在对话中遇到"查 HS 编码""这个编码是什么""棉制T恤的编码是多少"时自动调用。
+  pi.registerTool({
+    name: "logistic_hs_code",
+    description: "查询 HS 编码。输入 HS 编码（纯数字，如 6109100021）或品名关键词（如 棉制T恤），返回匹配的编码/品名/税率/计量单位/出口退税率。当用户要查 HS 编码、确认商品归类、看税率退税率时使用。",
+    parameters: Type.Object({
+      query: Type.String({ description: "HS 编码（纯数字）或品名关键词（中文）" }),
+    }),
+    async execute(_id, params) {
+      let resp: Response;
+      try {
+        resp = await fetch(
+          `${SIDECAR_URL}/api/tools/hs-code?q=${encodeURIComponent(params.query)}`
+        );
+      } catch (e: any) {
+        throw new Error(`无法连接 sidecar（${SIDECAR_URL}）：${e.message}。请确认 Tauri 已启动 Python sidecar。`);
+      }
+      if (!resp.ok) {
+        let detail = "";
+        try { detail = (await resp.json()).detail || ""; } catch {}
+        throw new Error(`查询失败 HTTP ${resp.status}：${detail || resp.statusText}`);
+      }
+      const data = await resp.json();
+      // 结果直接返回给 LLM 解读，不落盘
+      return {
+        content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+        details: { count: data.count, matchType: data.match_type },
+      };
+    },
+  });
 }

@@ -17,11 +17,11 @@ from __future__ import annotations
 import io
 import zipfile
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
-from tools import invoice_packing, customs_generator, customs_extractor, data_analysis
+from tools import invoice_packing, customs_generator, customs_extractor, data_analysis, hs_code
 
 
 app = FastAPI(title="HT Logistic Workspace — Tools")
@@ -72,6 +72,14 @@ async def list_tools():
             "description": "上传 Excel/CSV，自动按列类型统计（数值/分类/时间）+ 相关性 + 直方图",
             "endpoint": "/api/tools/data-analysis",
             "input": "excel",
+            "output": "json",
+        },
+        {
+            "id": "hs-code",
+            "name": "HS 编码查询",
+            "description": "输入 HS 编码或品名关键词，查询编码/品名/税率/计量单位/出口退税率",
+            "endpoint": "/api/tools/hs-code?q=",
+            "input": "text",
             "output": "json",
         },
     ]}
@@ -160,6 +168,20 @@ async def analyze_data(file: UploadFile = File(...)):
         result = data_analysis.analyze_excel_data(content, file.filename or "upload.xlsx")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"分析失败：{e}")
+    return result
+
+
+@app.get("/api/tools/hs-code")
+async def query_hs_code(q: str = Query(..., description="HS 编码或品名关键词")):
+    """HS 编码查询：输入编码或品名 → 返回匹配的 HS 编码条目。
+
+    与其他工具不同，此端点是 GET 请求（无需上传文件），
+    参数 q 可为 HS 编码（纯数字）或品名关键词。
+    """
+    try:
+        result = hs_code.query_hs_code(q)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询失败：{e}")
     return result
 
 
