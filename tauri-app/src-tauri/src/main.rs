@@ -601,7 +601,13 @@ async fn send_request(
         stdin.flush().map_err(|e| e.to_string())?;
     }
 
-    match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+    // set_model 切换模型时 Pi 可能需要初始化 API client 并验证连接，
+    // 特别是 OpenAI 兼容端点（硅基流动/自定义地址），10s 不够，给 30s。
+    // 其他命令（get_state 等）保持 10s。
+    let cmd_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let timeout_secs = if cmd_type == "set_model" { 30 } else { 10 };
+
+    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx).await {
         Ok(Ok(resp)) => {
             let success = resp.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
             if !success {
@@ -613,7 +619,7 @@ async fn send_request(
         Ok(Err(_)) => Err("响应通道关闭".into()),
         Err(_) => {
             state.response_channels.lock().unwrap().remove(&id);
-            Err("请求超时（10s）".into())
+            Err(format!("请求超时（{}s）", timeout_secs))
         }
     }
 }
