@@ -1124,6 +1124,87 @@ fn get_model_config_path() -> Result<std::path::PathBuf, String> {
     Ok(agent.join("model-config.json"))
 }
 
+/// provider → (baseUrl, api类型, 环境变量名) 映射。
+/// 用于 apply_model_config 注入环境变量 + write_models_json 生成 Pi 配置。
+/// siliconflow/custom 用独立环境变量，不再劫持 OPENAI_API_KEY。
+fn provider_config(provider: &ModelProvider) -> Option<(String, &'static str, &'static str)> {
+    match provider.id.as_str() {
+        "anthropic" => Some(("https://api.anthropic.com".into(), "anthropic", "ANTHROPIC_API_KEY")),
+        "openai" => Some(("https://api.openai.com/v1".into(), "openai-completions", "OPENAI_API_KEY")),
+        "deepseek" => Some(("https://api.deepseek.com".into(), "openai-completions", "DEEPSEEK_API_KEY")),
+        "google" | "gemini" => Some(("https://generativelanguage.googleapis.com".into(), "google", "GOOGLE_API_KEY")),
+        "openrouter" => Some(("https://openrouter.ai/api/v1".into(), "openai-completions", "OPENROUTER_API_KEY")),
+        "siliconflow" => Some((
+            provider.base_url.clone().unwrap_or_else(|| "https://api.siliconflow.cn/v1".into()),
+            "openai-completions",
+            "SILICONFLOW_API_KEY",
+        )),
+        "mistral" => Some(("https://api.mistral.ai".into(), "openai-completions", "MISTRAL_API_KEY")),
+        "groq" => Some(("https://api.groq.com/openai".into(), "openai-completions", "GROQ_API_KEY")),
+        "custom" => {
+            let base = provider.base_url.clone()?;
+            Some((base, "openai-completions", "CUSTOM_API_KEY"))
+        }
+        _ => None,
+    }
+}
+
+/// 生成 ~/.pi/agent/models.json，把已配置的 provider 注册到 Pi。
+///
+/// Pi 通过 models.json 认识自定义 provider 和模型（官方文档 pi.dev/docs/latest/models）。
+/// 对每个已配置（enabled + apiKey 非空 + models 非空）的 provider 生成条目，
+/// Pi 读取后即可在 set_model 时使用这些模型。这解决了"model not found"问题——
+/// 之前注入 OPENAI_API_KEY+OPENAI_BASE_URL 让 Pi 的 OpenAI provider 指向硅基流动，
+/// 但 Pi 的 OpenAI provider 有内部模型注册表，不认识 "deepseek-ai/DeepSeek-V3.2" 等模型名。
+///
+/// 合并策略：保留用户自己配的非应用管理的 provider 条目，只更新应用管理的。
+fn write_models_json(config: &ModelConfig) -> Result<(), String> {
+    let agent_dir = get_agent_dir().ok_or("找不到 agent 目录")?;
+    if !agent_dir.exists() {
+        std::fs::create_dir_all(&agent_dir).map_err(|e| format!("创建目录失败：{e}"))?;
+    }
+    let path = agent_dir.join("models.json");
+
+    // 读取现有 models.json（如果有），保留用户自己配的 provider
+    let mut existing: serde_json::Value = if path.exists() {
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or(serde_json::json!({ "providers": {} }))
+    } else {
+        serde_json::json!({ "providers": {} })
+    };
+    if !existing["providers"].is_object() {
+        existing["providers"] = serde_json::json!({});
+    }
+    let providers = existing["providers"].as_object_mut().unwrap();
+
+    for provider in &config.providers {
+        if !provider.enabled || provider.api_key.is_empty() || provider.models.is_empty() {
+            providers.remove(&provider.id);
+            continue;
+        }
+        let (base_url, api, env_var) = match provider_config(provider) {
+            Some(v) => v,
+            None => continue,
+        };
+        let models: Vec<serde_json::Value> = provider.models.iter().map(|m| {
+            serde_json::json!({ "id": m, "name": m })
+        }).collect();
+        providers[&provider.id] = serde_json::json!({
+            "baseUrl": base_url,
+            "api": api,
+            "apiKey": format!("${}", env_var),
+            "models": models
+        });
+    }
+
+    let content = serde_json::to_string_pretty(&existing).map_err(|e| e.to_string())?;
+    std::fs::write(&path, content).map_err(|e| format!("写入 models.json 失败：{e}"))?;
+    eprintln!("[pi] 已写入 models.json: {}", path.display());
+    Ok(())
+}
+
 /// 读取模型配置
 ///
 /// 老用户的配置文件已存在，直接读会拿到旧模型列表（如 deepseek-chat）。
@@ -1194,40 +1275,24 @@ async fn apply_model_config() -> Result<String, String> {
     let content = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败：{e}"))?;
     let config: ModelConfig = serde_json::from_str(&content).unwrap_or_else(|_| ModelConfig::default());
 
+    // 先写入 models.json，让 Pi 通过它认识自定义 provider 和模型。
+    // 这比注入 OPENAI_API_KEY+OPENAI_BASE_URL 更可靠——Pi 的 OpenAI provider
+    // 有内部模型注册表，不认识硅基流动的模型名，set_model 会返回 "model not found"。
+    if let Err(e) = write_models_json(&config) {
+        eprintln!("[pi] 写入 models.json 失败: {}", e);
+    }
+
     let mut applied = Vec::new();
     for provider in &config.providers {
         if !provider.enabled || provider.api_key.is_empty() {
             continue;
         }
-        let env_name = match provider.id.as_str() {
-            "anthropic" => "ANTHROPIC_API_KEY",
-            "openai" => "OPENAI_API_KEY",
-            "deepseek" => "DEEPSEEK_API_KEY",
-            "google" | "gemini" => "GOOGLE_API_KEY",
-            "openrouter" => "OPENROUTER_API_KEY",
-            "mistral" => "MISTRAL_API_KEY",
-            "groq" => "GROQ_API_KEY",
-            // siliconflow 和 custom 都是 OpenAI 兼容端点，Pi 没有 siliconflow provider，
-            // 必须注入 OPENAI_API_KEY + OPENAI_BASE_URL 让 Pi 的 OpenAI provider 指向它们。
-            // 注意：若同时启用了原生 openai provider，后处理的 siliconflow/custom 会覆盖
-            // OPENAI_API_KEY 和 OPENAI_BASE_URL，用户应只启用其中一个。
-            "siliconflow" | "custom" => "OPENAI_API_KEY",
-            _ => continue,
+        let (_, _, env_name) = match provider_config(provider) {
+            Some(v) => v,
+            None => continue,
         };
         std::env::set_var(env_name, &provider.api_key);
         applied.push(provider.name.clone());
-
-        // 如果有 base_url，也设置对应的环境变量（如果 Pi 支持的话）
-        if let Some(base_url) = &provider.base_url {
-            // siliconflow / custom 的 base_url 必须设成 OPENAI_BASE_URL，
-            // 让 Pi 把它当 OpenAI 兼容端点用；其他 provider 用各自的标准变量名。
-            let base_env = if provider.id == "custom" || provider.id == "siliconflow" {
-                "OPENAI_BASE_URL".to_string()
-            } else {
-                format!("{}_BASE_URL", provider.id.to_uppercase())
-            };
-            std::env::set_var(&base_env, base_url);
-        }
     }
 
     if applied.is_empty() {
@@ -1246,39 +1311,21 @@ fn apply_model_config_sync() -> Result<String, String> {
     let content = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败：{e}"))?;
     let config: ModelConfig = serde_json::from_str(&content).unwrap_or_else(|_| ModelConfig::default());
 
+    if let Err(e) = write_models_json(&config) {
+        eprintln!("[pi] 写入 models.json 失败: {}", e);
+    }
+
     let mut applied = Vec::new();
     for provider in &config.providers {
         if !provider.enabled || provider.api_key.is_empty() {
             continue;
         }
-        let env_name = match provider.id.as_str() {
-            "anthropic" => "ANTHROPIC_API_KEY",
-            "openai" => "OPENAI_API_KEY",
-            "deepseek" => "DEEPSEEK_API_KEY",
-            "google" | "gemini" => "GOOGLE_API_KEY",
-            "openrouter" => "OPENROUTER_API_KEY",
-            "mistral" => "MISTRAL_API_KEY",
-            "groq" => "GROQ_API_KEY",
-            // siliconflow 和 custom 都是 OpenAI 兼容端点，Pi 没有 siliconflow provider，
-            // 必须注入 OPENAI_API_KEY + OPENAI_BASE_URL 让 Pi 的 OpenAI provider 指向它们。
-            // 注意：若同时启用了原生 openai provider，后处理的 siliconflow/custom 会覆盖
-            // OPENAI_API_KEY 和 OPENAI_BASE_URL，用户应只启用其中一个。
-            "siliconflow" | "custom" => "OPENAI_API_KEY",
-            _ => continue,
+        let (_, _, env_name) = match provider_config(provider) {
+            Some(v) => v,
+            None => continue,
         };
         std::env::set_var(env_name, &provider.api_key);
         applied.push(provider.name.clone());
-
-        if let Some(base_url) = &provider.base_url {
-            // siliconflow / custom 的 base_url 必须设成 OPENAI_BASE_URL，
-            // 让 Pi 把它当 OpenAI 兼容端点用；其他 provider 用各自的标准变量名。
-            let base_env = if provider.id == "custom" || provider.id == "siliconflow" {
-                "OPENAI_BASE_URL".to_string()
-            } else {
-                format!("{}_BASE_URL", provider.id.to_uppercase())
-            };
-            std::env::set_var(&base_env, base_url);
-        }
     }
 
     if applied.is_empty() {

@@ -1240,10 +1240,9 @@ export default function App() {
   //      从 Pi 的 get_available_models 返回值里筛，provider 名大小写归一化后匹配。
   //   2. 用户在设置页填的模型列表（所有已配置 provider）：
   //      Pi 可能没返回某些模型（如 deepseek-v4-flash 太新、硅基流动 Pi 根本不认识），
-  //      用设置页的 models 列表补齐。provider 字段按规则映射：
-  //        - Pi 原生 provider：用 Pi 的 provider 名（如 "DeepSeek"）
-  //        - Pi 不认识的 provider（siliconflow/custom）：填 "OpenAI"，
-  //          因为注入的是 OPENAI_API_KEY+OPENAI_BASE_URL，Pi 当 OpenAI 兼容端点用。
+  //      用设置页的 models 列表补齐。
+  //   3. siliconflow/custom 通过 ~/.pi/agent/models.json 注册为 Pi 自定义 provider，
+  //      set_model 时 provider 参数用 provider id（如 "siliconflow"），和 models.json key 一致。
   const PI_NATIVE_PROVIDERS = new Set(["anthropic", "openai", "deepseek", "google", "gemini", "openrouter", "mistral", "groq", "azure", "azure openai"]);
   const PI_PROVIDER_DISPLAY: Record<string, string> = {
     anthropic: "Anthropic", openai: "OpenAI", deepseek: "DeepSeek",
@@ -1266,12 +1265,13 @@ export default function App() {
       : [];
 
     // 2. 用户设置页填的模型列表补齐（Pi 没返回的）
+    //    provider 名：原生用 Pi 的显示名（Pascal case），
+    //    非原生（siliconflow/custom）用 provider id（和 models.json key 一致）
     const fromConfig = configured.flatMap((p) => {
       const isNative = PI_NATIVE_PROVIDERS.has(p.id.toLowerCase());
-      // provider 名：原生用 Pi 的显示名，非原生（siliconflow/custom）用 OpenAI
       const providerName = isNative
         ? (PI_PROVIDER_DISPLAY[p.id.toLowerCase()] || p.id)
-        : "OpenAI";
+        : p.id;
       return p.models.map((modelId) => ({
         id: modelId,
         name: modelId,
