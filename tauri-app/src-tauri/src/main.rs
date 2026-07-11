@@ -1177,6 +1177,8 @@ fn apply_models_config_inner() -> Result<String, String> {
                 continue;
             }
             // apiKey 格式：$ENV_VAR 或明文 key
+            // 明文 key 时设置 <ID>_API_KEY 环境变量（如 SILICONFLOW_API_KEY），
+            // 这样 models.json 里 apiKey="$SILICONFLOW_API_KEY" 的引用能解析到实际值。
             let (env_name, actual_key) = if let Some(stripped) = api_key.strip_prefix('$') {
                 // ${ENV_VAR} 格式：从环境变量读实际值
                 let var_name = stripped.trim_start_matches('{').trim_end_matches('}');
@@ -1185,8 +1187,8 @@ fn apply_models_config_inner() -> Result<String, String> {
                     _ => continue, // 环境变量未设置，跳过
                 }
             } else {
-                // 明文 key：用 provider id 大写作为环境变量名
-                (id.to_uppercase(), api_key.to_string())
+                // 明文 key：设置 <ID>_API_KEY 环境变量
+                (format!("{}_API_KEY", id.to_uppercase()), api_key.to_string())
             };
             std::env::set_var(&env_name, &actual_key);
             applied.push(id.clone());

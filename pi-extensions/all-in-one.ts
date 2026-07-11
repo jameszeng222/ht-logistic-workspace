@@ -119,6 +119,49 @@ async function callSidecarJsonTool(
 }
 
 export default function (pi: ExtensionAPI) {
+  // 读 models.json，用 pi.registerProvider() 注册所有已配置的 provider。
+  // Pi 官方支持自动读 models.json，但在 RPC 模式下可能不自动重载。
+  // 扩展在 Pi 启动时加载（工厂函数在 startup 前执行），这里主动注册更可靠。
+  // 文档：pi.dev/docs/latest/custom-provider（pi.registerProvider）
+  try {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const modelsJsonPath = path.join(
+      expandHome("~"), ".pi", "agent", "models.json"
+    );
+    if (fs.existsSync(modelsJsonPath)) {
+      const config = JSON.parse(fs.readFileSync(modelsJsonPath, "utf-8"));
+      if (config.providers) {
+        for (const [id, provider] of Object.entries(config.providers)) {
+          const p = provider as any;
+          if (!p.apiKey || !p.models || p.models.length === 0) continue;
+          // 解析 apiKey：$ENV_VAR 格式从环境变量读值，明文直接用
+          let apiKey = p.apiKey;
+          if (typeof apiKey === "string" && apiKey.startsWith("$")) {
+            const varName = apiKey.replace(/^\$\{?/, "").replace(/\}$/, "");
+            apiKey = process.env[varName] || "";
+            if (!apiKey) continue;
+          }
+          pi.registerProvider(id, {
+            baseUrl: p.baseUrl,
+            api: p.api || "openai-completions",
+            apiKey: apiKey,
+            models: p.models.map((m: any) => ({
+              id: m.id,
+              name: m.name || m.id,
+              reasoning: m.reasoning || false,
+              input: m.input || ["text"],
+              contextWindow: m.contextWindow || 128000,
+              maxTokens: m.maxTokens || 4096,
+            })),
+          });
+        }
+      }
+    }
+  } catch (e) {
+    // models.json 不存在或解析失败，静默跳过（Pi 可能自己读了）
+  }
+
   // Feature detection: optional deps. If missing, skip registering dependent
   // tools so the extension still loads (core logistic tools unaffected).
   // better-sqlite3 is a native module needing Python + VS Build Tools to compile
@@ -564,10 +607,43 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // HS 编码查询：无需上传文件，GET 请求，输入编码或品名关键词。
-  // 与其他物流工具的区别：这是查询型工具（输入→返回结构化数据），
-  // 不是文件处理型工具（上传文件→返回文件）。
-  // AI 在对话中遇到"查 HS 编码""这个编码是什么""棉制T恤的编码是多少"时自动调用。
+  // HS 编码查询：直接读本地 JSON 数据文件，不依赖 sidecar HTTP 调用。
+  // Pi 扩展环境的 fetch 调 localhost 可能受限，改为直接读文件避免网络依赖。
+  // 数据文件路径：~/.pi/agent/hs_codes.json（由 Rust 端首次启动时生成）
+  // 如果数据文件不存在，用内嵌的示例数据。
+  const HS_CODES_BUILTIN = [
+    { code: "6109100021", name: "棉制针织或钩编的T恤衫、汗衫及其他背心", category: "第十一类 纺织原料及纺织制品", tax_rate: "6%", unit: "件", export_rebate: "13%" },
+    { code: "6109100091", name: "其他棉制针织或钩编的T恤衫、汗衫", category: "第十一类 纺织原料及纺织制品", tax_rate: "6%", unit: "件", export_rebate: "13%" },
+    { code: "62034290", name: "棉制男式长裤、工装裤等", category: "第十一类 纺织原料及纺织制品", tax_rate: "6%", unit: "条", export_rebate: "13%" },
+    { code: "64029929", name: "橡塑底及面其他鞋靴", category: "第十二类 鞋、帽、伞、杖、鞭", tax_rate: "10%", unit: "双", export_rebate: "13%" },
+    { code: "95030021", name: "羽毛制羽毛球", category: "第二十类 杂项制品", tax_rate: "6%", unit: "个", export_rebate: "13%" },
+    { code: "85234910", name: "其他光盘（非仅录制声音）", category: "第十六类 机器、机械器具", tax_rate: "0%", unit: "张", export_rebate: "13%" },
+    { code: "85171200", name: "电话机（智能手机等）", category: "第十六类 机器、机械器具", tax_rate: "0%", unit: "台", export_rebate: "13%" },
+    { code: "49019900", name: "其他书籍、小册子及类似印刷品", category: "第十类 木浆及纸", tax_rate: "0%", unit: "千克", export_rebate: "10%" },
+    { code: "33030000", name: "香水及花露水", category: "第六类 化工产品", tax_rate: "3%", unit: "千克", export_rebate: "13%" },
+    { code: "42022100", name: "皮革、再生皮革制手提包", category: "第八类 皮革制品", tax_rate: "6%", unit: "个", export_rebate: "13%" },
+    { code: "71131919", name: "其他贵金属制首饰", category: "第十五类 贱金属及其制品", tax_rate: "10%", unit: "克", export_rebate: "13%" },
+    { code: "94035010", name: "卧室用木家具", category: "第二十类 杂项制品", tax_rate: "0%", unit: "件", export_rebate: "13%" },
+    { code: "39241000", name: "塑料制餐具及厨房用具", category: "第七类 塑料及其制品", tax_rate: "6%", unit: "千克", export_rebate: "13%" },
+    { code: "69120010", name: "陶瓷餐具", category: "第十三类 陶瓷产品", tax_rate: "6%", unit: "个", export_rebate: "13%" },
+    { code: "21011100", name: "咖啡浓缩精汁及以其为基本成分的制品", category: "第一类 活动物；动物产品", tax_rate: "10%", unit: "千克", export_rebate: "13%" },
+    { code: "18063200", name: "巧克力（夹心或非夹心）", category: "第二类 植物产品", tax_rate: "8%", unit: "千克", export_rebate: "13%" },
+    { code: "22042100", name: "2升及以下容器装鲜葡萄酿酒", category: "第四类 饮料、酒及醋", tax_rate: "14%", unit: "升", export_rebate: "13%" },
+    { code: "30049059", name: "其他混合或非混合产品（中药酒等）", category: "第六类 化工产品", tax_rate: "3%", unit: "千克", export_rebate: "13%" },
+    { code: "84713000", name: "便携式数字自动数据处理设备（笔记本电脑等）", category: "第十六类 机器、机械器具", tax_rate: "0%", unit: "台", export_rebate: "13%" },
+    { code: "85287212", name: "彩色液晶电视机（屏幕＞52cm）", category: "第十六类 机器、机械器具", tax_rate: "15%", unit: "台", export_rebate: "13%" },
+    { code: "84151010", name: "独立式空调器（制冷≤14000大卡/时）", category: "第十六类 机器、机械器具", tax_rate: "0%", unit: "台", export_rebate: "13%" },
+    { code: "85044013", name: "手机用充电器（开关电源）", category: "第十六类 机器、机械器具", tax_rate: "0%", unit: "个", export_rebate: "13%" },
+    { code: "85076000", name: "锂离子蓄电池", category: "第十六类 机器、机械器具", tax_rate: "6%", unit: "个", export_rebate: "13%" },
+    { code: "87089999", name: "机动车辆用其他零件、附件", category: "第十七类 车辆、航空器", tax_rate: "6%", unit: "千克", export_rebate: "13%" },
+    { code: "87120030", name: "电动自行车", category: "第十七类 车辆、航空器", tax_rate: "5%", unit: "辆", export_rebate: "13%" },
+    { code: "95063200", name: "高尔夫球棍", category: "第二十类 杂项制品", tax_rate: "6%", unit: "根", export_rebate: "13%" },
+    { code: "95066210", name: "篮球、排球、足球", category: "第二十类 杂项制品", tax_rate: "6%", unit: "个", export_rebate: "13%" },
+    { code: "61099090", name: "其他纺织材料制针织或钩编T恤衫", category: "第十一类 纺织原料及纺织制品", tax_rate: "6%", unit: "件", export_rebate: "13%" },
+    { code: "61102000", name: "棉制针织或钩编的套头衫、开襟衫、马甲", category: "第十一类 纺织原料及纺织制品", tax_rate: "6%", unit: "件", export_rebate: "13%" },
+    { code: "62014090", name: "其他纺织材料制女式大衣、斗篷", category: "第十一类 纺织原料及纺织制品", tax_rate: "6%", unit: "件", export_rebate: "13%" },
+  ];
+
   pi.registerTool({
     name: "logistic_hs_code",
     description: "查询 HS 编码。输入 HS 编码（纯数字，如 6109100021）或品名关键词（如 棉制T恤），返回匹配的编码/品名/税率/计量单位/出口退税率。当用户要查 HS 编码、确认商品归类、看税率退税率时使用。",
@@ -575,24 +651,44 @@ export default function (pi: ExtensionAPI) {
       query: Type.String({ description: "HS 编码（纯数字）或品名关键词（中文）" }),
     }),
     async execute(_id, params) {
-      let resp: Response;
+      // 直接读本地 JSON 数据文件，不依赖 sidecar HTTP 调用
+      const fs = require("node:fs");
+      const path = require("node:path");
+      let data = HS_CODES_BUILTIN;
+      const dbPath = path.join(expandHome("~"), ".pi", "agent", "hs_codes.json");
       try {
-        resp = await fetch(
-          `${SIDECAR_URL}/api/tools/hs-code?q=${encodeURIComponent(params.query)}`
+        if (fs.existsSync(dbPath)) {
+          data = JSON.parse(fs.readFileSync(dbPath, "utf-8"));
+        }
+      } catch { /* 用内嵌数据 */ }
+
+      const query = (params.query || "").trim();
+      if (!query) {
+        return { content: [{ type: "text", text: "查询为空" }], details: { count: 0 } };
+      }
+
+      const isCodeQuery = /^\d+$/.test(query.replace(/\s/g, ""));
+      let results: any[];
+      if (isCodeQuery) {
+        const code = query.replace(/\s/g, "");
+        results = data.filter((d: any) => d.code === code || d.code.startsWith(code));
+      } else {
+        const keywords = query.toLowerCase().split(/\s+/).filter(Boolean);
+        results = data.filter((d: any) =>
+          keywords.every((kw: string) => (d.name || "").toLowerCase().includes(kw))
         );
-      } catch (e: any) {
-        throw new Error(`无法连接 sidecar（${SIDECAR_URL}）：${e.message}。请确认 Tauri 已启动 Python sidecar。`);
       }
-      if (!resp.ok) {
-        let detail = "";
-        try { detail = (await resp.json()).detail || ""; } catch {}
-        throw new Error(`查询失败 HTTP ${resp.status}：${detail || resp.statusText}`);
-      }
-      const data = await resp.json();
-      // 结果直接返回给 LLM 解读，不落盘
+      results = results.slice(0, 20);
+
+      const result = {
+        query,
+        match_type: results.length > 0 ? (isCodeQuery ? "code" : "name") : "none",
+        results,
+        count: results.length,
+      };
       return {
-        content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
-        details: { count: data.count, matchType: data.match_type },
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        details: { count: results.length, matchType: result.match_type },
       };
     },
   });

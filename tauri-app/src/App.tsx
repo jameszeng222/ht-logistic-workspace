@@ -1184,30 +1184,16 @@ export default function App() {
   }, [filteredSessions]);
 
   // 聊天框模型下拉框只显示已配置 API Key 且有模型列表的 provider 的模型。
-  // models.json 就是 Pi 的配置，get_available_models 会返回 models.json 注册的模型；
-  // 这里合并 modelsConfig 中的模型列表与 Pi 原生返回值，按 provider/id 去重。
-  // provider 名用 provider id（和 models.json key 一致）。
+  // 不合并 Pi 原生返回的模型（那些 provider 可能没配 API Key，选了也没用）。
   const visibleModels = useMemo(() => {
-    if (!modelsConfig) return models;
+    if (!modelsConfig) return [];
     const configured = Object.entries(modelsConfig.providers)
       .filter(([_, p]) => p.apiKey && p.models.length > 0);
     if (configured.length === 0) return [];
-
-    // 从 modelsConfig 合成模型列表
-    const fromConfig = configured.flatMap(([id, p]) =>
+    return configured.flatMap(([id, p]) =>
       p.models.map(m => ({ id: m.id, name: m.name, provider: id } as ModelInfo))
     );
-
-    // 也包含 Pi 原生返回的模型（可能有 models.json 之外的内置模型）
-    const seen = new Set<string>();
-    const merged = [...fromConfig, ...models].filter(m => {
-      const key = `${m.provider.toLowerCase()}/${m.id}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    return merged;
-  }, [models, modelsConfig]);
+  }, [modelsConfig]);
 
   return (
     <div className="app">
