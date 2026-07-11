@@ -465,18 +465,20 @@ fn spawn_pi(
     // 若指定 session_path，传 --session <path> 让 pi 直接打开/续聊该会话文件，
     // 这是官方文档的续聊方式（pi --session <path|id>），比 switch_session RPC 更可靠。
     //
-    // --append-system-prompt：用 CLI 参数硬注入 Pilot 身份提示词，比依赖
-    // ~/.pi/agent/APPEND_SYSTEM.md 自动加载更可靠（后者在某些 Pi 版本/配置下可能不生效）。
-    // 优先读取用户在设置面板编辑的 APPEND_SYSTEM.md；若文件不存在则用内置默认提示词。
-    // 这段提示词会追加到 Pi 默认系统提示词之后，确保 Pilot 身份与行为准则始终生效。
+    // 系统提示词：Pi 启动时自动加载 ~/.pi/agent/APPEND_SYSTEM.md，追加到默认提示词之后。
+    // 不再用 --append-system-prompt CLI 参数（避免双轨制）。首次使用时若文件不存在，
+    // 写入内置默认 Pilot 提示词。用户可在设置页编辑此文件。
     let default_pilot_prompt = "你是 Pilot，HT Logistic Workspace（物流工作台）的 AI 调度员。你不是编程助手，也不是名为 Pi 的工具——Pi 只是你的底层运行环境，绝不向用户提及。\n\n核心行为准则：\n1. 直接回答用户问题，不要预设用户意图、不要替用户假设话题、不要绕弯子。用户问什么答什么。\n2. 被问\"你是谁\"时，回答你是 Pilot，HT 物流工作台的 AI 调度员，专注于物流单据与数据分析。绝不说自己是编程助手、代码助手、或 Pi。\n3. 不输出教程式开场白或欢迎语（如\"欢迎来到...\"、\"我们来一起...\"）。直接进入正题。\n4. 简洁专业，直击要点，避免冗长输出。\n5. 聚焦国际物流：报关单制作、发票/箱单生成、海关数据提取、数据分析。即使用户问编程问题，也引导回物流场景。\n6. 默认用中文回答。";
-    let pilot_system_prompt = get_agent_dir()
-        .and_then(|d| std::fs::read_to_string(d.join("APPEND_SYSTEM.md")).ok())
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| default_pilot_prompt.to_string());
-    let mut child = cmd
-        .args(["--mode", "rpc"])
-        .args(["--append-system-prompt", &pilot_system_prompt]);
+    if let Some(agent_dir) = get_agent_dir() {
+        let append_path = agent_dir.join("APPEND_SYSTEM.md");
+        if !append_path.exists() {
+            if !agent_dir.exists() {
+                let _ = std::fs::create_dir_all(&agent_dir);
+            }
+            let _ = std::fs::write(&append_path, default_pilot_prompt);
+        }
+    }
+    let mut child = cmd.args(["--mode", "rpc"]);
     if let Some(sp) = session_path {
         child = child.args(["--session", sp]);
     }
@@ -1010,326 +1012,187 @@ async fn uninstall_extension(name: String) -> Result<(), String> {
 }
 
 // ============================ 模型配置管理 ============================
+//
+// 直接读写 Pi 原生的 ~/.pi/agent/models.json，不再维护独立的 model-config.json。
+// Pi 通过 models.json 注册自定义 provider 和模型（官方文档 pi.dev/docs/latest/models）。
+// apiKey 字段用 ${ENV_VAR} 语法引用环境变量，apply_models_config 负责注入实际值。
+//
+// 默认模板：首次加载时若 models.json 不存在，用内置模板初始化，包含常用 provider
+// 的预设 baseUrl/api/模型列表，但 apiKey 留空（用户填后保存才生效）。
 
-/// 模型提供商配置
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-struct ModelProvider {
-    id: String,
-    name: String,
-    api_key: String,
-    base_url: Option<String>,
-    models: Vec<String>,
-    default_model: Option<String>,
-    enabled: bool,
-}
-
-/// 模型配置
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ModelConfig {
-    providers: Vec<ModelProvider>,
-    default_provider: Option<String>,
-    default_model: Option<String>,
-}
-
-impl Default for ModelConfig {
-    fn default() -> Self {
-        ModelConfig {
-            providers: vec![
-                ModelProvider {
-                    id: "anthropic".into(),
-                    name: "Anthropic".into(),
-                    api_key: String::new(),
-                    base_url: None,
-                    models: vec!["claude-sonnet-4-5-20250929".into(), "claude-opus-4-1-20250805".into(), "claude-haiku-4-5-20251001".into()],
-                    default_model: Some("claude-sonnet-4-5-20250929".into()),
-                    enabled: false,
-                },
-                ModelProvider {
-                    id: "deepseek".into(),
-                    name: "DeepSeek".into(),
-                    api_key: String::new(),
-                    // DeepSeek 官方文档 base_url 是 https://api.deepseek.com (不带 /v1,
-                    // 与 OpenAI SDK 兼容路径自动拼接)。旧文档写 /v1 也能用但不推荐。
-                    base_url: Some("https://api.deepseek.com".into()),
-                    // deepseek-chat / deepseek-reasoner 将于 2026/07/24 弃用,
-                    // 分别对应 v4-flash 的非思考/思考模式。新模型名优先。
-                    models: vec!["deepseek-v4-flash".into(), "deepseek-v4-pro".into(), "deepseek-chat".into(), "deepseek-reasoner".into()],
-                    default_model: Some("deepseek-v4-flash".into()),
-                    enabled: false,
-                },
-                ModelProvider {
-                    id: "openai".into(),
-                    name: "OpenAI".into(),
-                    api_key: String::new(),
-                    base_url: None,
-                    models: vec!["gpt-4.1".into(), "gpt-4.1-mini".into(), "gpt-4o".into(), "gpt-4o-mini".into(), "o3-mini".into()],
-                    default_model: Some("gpt-4.1".into()),
-                    enabled: false,
-                },
-                ModelProvider {
-                    id: "google".into(),
-                    name: "Google Gemini".into(),
-                    api_key: String::new(),
-                    base_url: None,
-                    models: vec!["gemini-2.5-flash".into(), "gemini-2.5-pro".into(), "gemini-2.0-flash".into()],
-                    default_model: Some("gemini-2.5-flash".into()),
-                    enabled: false,
-                },
-                ModelProvider {
-                    id: "openrouter".into(),
-                    name: "OpenRouter".into(),
-                    api_key: String::new(),
-                    base_url: Some("https://openrouter.ai/api/v1".into()),
-                    models: vec!["anthropic/claude-sonnet-4.5".into(), "openai/gpt-4.1".into(), "google/gemini-2.5-flash".into(), "deepseek/deepseek-v4-flash".into()],
-                    default_model: Some("anthropic/claude-sonnet-4.5".into()),
-                    enabled: false,
-                },
-                ModelProvider {
-                    id: "siliconflow".into(),
-                    name: "硅基流动".into(),
-                    api_key: String::new(),
-                    // 硅基流动兼容 OpenAI 接口，base_url 为 https://api.siliconflow.cn/v1
-                    base_url: Some("https://api.siliconflow.cn/v1".into()),
-                    // 主流模型：DeepSeek V4 系列、GLM-5.1、Kimi K2.6、Qwen3 旗舰
-                    models: vec![
-                        "deepseek-ai/DeepSeek-V4-Flash".into(),
-                        "deepseek-ai/DeepSeek-V4-Pro".into(),
-                        "zai-org/GLM-5.1".into(),
-                        "moonshotai/Kimi-K2.6".into(),
-                        "Qwen/Qwen3-235B-A22B-Instruct".into(),
-                    ],
-                    default_model: Some("deepseek-ai/DeepSeek-V4-Flash".into()),
-                    enabled: false,
-                },
-                ModelProvider {
-                    id: "custom".into(),
-                    name: "自定义地址".into(),
-                    api_key: String::new(),
-                    // base_url 和 models 留空，由用户在设置页填写
-                    base_url: None,
-                    models: vec![],
-                    default_model: None,
-                    enabled: false,
-                },
-            ],
-            default_provider: None,
-            default_model: None,
-        }
-    }
-}
-
-/// 模型配置文件路径
-fn get_model_config_path() -> Result<std::path::PathBuf, String> {
+/// models.json 文件路径
+fn get_models_json_path() -> Result<std::path::PathBuf, String> {
     let agent = get_agent_dir().ok_or("找不到 agent 目录")?;
-    Ok(agent.join("model-config.json"))
+    Ok(agent.join("models.json"))
 }
 
-/// provider → (baseUrl, api类型, 环境变量名) 映射。
-/// 用于 apply_model_config 注入环境变量 + write_models_json 生成 Pi 配置。
-/// siliconflow/custom 用独立环境变量，不再劫持 OPENAI_API_KEY。
-fn provider_config(provider: &ModelProvider) -> Option<(String, &'static str, &'static str)> {
-    match provider.id.as_str() {
-        "anthropic" => Some(("https://api.anthropic.com".into(), "anthropic", "ANTHROPIC_API_KEY")),
-        "openai" => Some(("https://api.openai.com/v1".into(), "openai-completions", "OPENAI_API_KEY")),
-        "deepseek" => Some(("https://api.deepseek.com".into(), "openai-completions", "DEEPSEEK_API_KEY")),
-        "google" | "gemini" => Some(("https://generativelanguage.googleapis.com".into(), "google", "GOOGLE_API_KEY")),
-        "openrouter" => Some(("https://openrouter.ai/api/v1".into(), "openai-completions", "OPENROUTER_API_KEY")),
-        "siliconflow" => Some((
-            provider.base_url.clone().unwrap_or_else(|| "https://api.siliconflow.cn/v1".into()),
-            "openai-completions",
-            "SILICONFLOW_API_KEY",
-        )),
-        "mistral" => Some(("https://api.mistral.ai".into(), "openai-completions", "MISTRAL_API_KEY")),
-        "groq" => Some(("https://api.groq.com/openai".into(), "openai-completions", "GROQ_API_KEY")),
-        "custom" => {
-            let base = provider.base_url.clone()?;
-            Some((base, "openai-completions", "CUSTOM_API_KEY"))
+/// 生成默认的 models.json 模板（首次使用时）
+fn default_models_json() -> serde_json::Value {
+    serde_json::json!({
+        "providers": {
+            "anthropic": {
+                "baseUrl": "https://api.anthropic.com",
+                "api": "anthropic",
+                "apiKey": "$ANTHROPIC_API_KEY",
+                "models": [
+                    { "id": "claude-sonnet-4-5-20250929", "name": "Claude Sonnet 4.5" },
+                    { "id": "claude-opus-4-1-20250805", "name": "Claude Opus 4.1" },
+                    { "id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5" }
+                ]
+            },
+            "deepseek": {
+                "baseUrl": "https://api.deepseek.com",
+                "api": "openai-completions",
+                "apiKey": "$DEEPSEEK_API_KEY",
+                "models": [
+                    { "id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash" },
+                    { "id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro" }
+                ]
+            },
+            "openai": {
+                "baseUrl": "https://api.openai.com/v1",
+                "api": "openai-completions",
+                "apiKey": "$OPENAI_API_KEY",
+                "models": [
+                    { "id": "gpt-4.1", "name": "GPT-4.1" },
+                    { "id": "gpt-4.1-mini", "name": "GPT-4.1 Mini" },
+                    { "id": "gpt-4o", "name": "GPT-4o" }
+                ]
+            },
+            "google": {
+                "baseUrl": "https://generativelanguage.googleapis.com",
+                "api": "google",
+                "apiKey": "$GOOGLE_API_KEY",
+                "models": [
+                    { "id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash" },
+                    { "id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro" }
+                ]
+            },
+            "openrouter": {
+                "baseUrl": "https://openrouter.ai/api/v1",
+                "api": "openai-completions",
+                "apiKey": "$OPENROUTER_API_KEY",
+                "models": [
+                    { "id": "anthropic/claude-sonnet-4.5", "name": "Claude Sonnet 4.5 (via OpenRouter)" },
+                    { "id": "openai/gpt-4.1", "name": "GPT-4.1 (via OpenRouter)" },
+                    { "id": "deepseek/deepseek-v4-flash", "name": "DeepSeek V4 Flash (via OpenRouter)" }
+                ]
+            },
+            "siliconflow": {
+                "baseUrl": "https://api.siliconflow.cn/v1",
+                "api": "openai-completions",
+                "apiKey": "$SILICONFLOW_API_KEY",
+                "models": [
+                    { "id": "deepseek-ai/DeepSeek-V4-Flash", "name": "DeepSeek V4 Flash" },
+                    { "id": "deepseek-ai/DeepSeek-V4-Pro", "name": "DeepSeek V4 Pro" },
+                    { "id": "zai-org/GLM-5.1", "name": "GLM-5.1" },
+                    { "id": "Qwen/Qwen3-235B-A22B-Instruct", "name": "Qwen3 235B" }
+                ]
+            },
+            "custom": {
+                "baseUrl": "",
+                "api": "openai-completions",
+                "apiKey": "$CUSTOM_API_KEY",
+                "models": []
+            }
         }
-        _ => None,
-    }
+    })
 }
 
-/// 生成 ~/.pi/agent/models.json，把已配置的 provider 注册到 Pi。
+/// 读取 Pi 的 models.json
 ///
-/// Pi 通过 models.json 认识自定义 provider 和模型（官方文档 pi.dev/docs/latest/models）。
-/// 对每个已配置（enabled + apiKey 非空 + models 非空）的 provider 生成条目，
-/// Pi 读取后即可在 set_model 时使用这些模型。这解决了"model not found"问题——
-/// 之前注入 OPENAI_API_KEY+OPENAI_BASE_URL 让 Pi 的 OpenAI provider 指向硅基流动，
-/// 但 Pi 的 OpenAI provider 有内部模型注册表，不认识 "deepseek-ai/DeepSeek-V3.2" 等模型名。
-///
-/// 合并策略：保留用户自己配的非应用管理的 provider 条目，只更新应用管理的。
-fn write_models_json(config: &ModelConfig) -> Result<(), String> {
-    let agent_dir = get_agent_dir().ok_or("找不到 agent 目录")?;
-    if !agent_dir.exists() {
-        std::fs::create_dir_all(&agent_dir).map_err(|e| format!("创建目录失败：{e}"))?;
-    }
-    let path = agent_dir.join("models.json");
-
-    // 读取现有 models.json（如果有），保留用户自己配的 provider
-    let mut existing: serde_json::Value = if path.exists() {
-        std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or(serde_json::json!({ "providers": {} }))
-    } else {
-        serde_json::json!({ "providers": {} })
-    };
-    if !existing["providers"].is_object() {
-        existing["providers"] = serde_json::json!({});
-    }
-    let providers = existing["providers"].as_object_mut().unwrap();
-
-    for provider in &config.providers {
-        if !provider.enabled || provider.api_key.is_empty() || provider.models.is_empty() {
-            providers.remove(&provider.id);
-            continue;
-        }
-        let (base_url, api, env_var) = match provider_config(provider) {
-            Some(v) => v,
-            None => continue,
-        };
-        let models: Vec<serde_json::Value> = provider.models.iter().map(|m| {
-            serde_json::json!({ "id": m, "name": m })
-        }).collect();
-        providers[&provider.id] = serde_json::json!({
-            "baseUrl": base_url,
-            "api": api,
-            "apiKey": format!("${}", env_var),
-            "models": models
-        });
-    }
-
-    let content = serde_json::to_string_pretty(&existing).map_err(|e| e.to_string())?;
-    std::fs::write(&path, content).map_err(|e| format!("写入 models.json 失败：{e}"))?;
-    eprintln!("[pi] 已写入 models.json: {}", path.display());
-    Ok(())
-}
-
-/// 读取模型配置
-///
-/// 老用户的配置文件已存在，直接读会拿到旧模型列表（如 deepseek-chat）。
-/// 这里做迁移合并：用默认配置的 models/base_url 覆盖（provider 级别，非用户数据），
-/// 但保留用户的 api_key/enabled/default_model。新 provider 自动补上。
+/// 若文件不存在，返回默认模板并写入磁盘。
+/// 若存在旧的 model-config.json（上一版壳子的配置），尝试迁移 apiKey 字段。
 #[tauri::command]
-async fn get_model_config() -> Result<serde_json::Value, String> {
-    let path = get_model_config_path()?;
+async fn get_models_config() -> Result<serde_json::Value, String> {
+    let path = get_models_json_path()?;
     if !path.exists() {
-        let default = ModelConfig::default();
-        return Ok(serde_json::to_value(&default).map_err(|e| e.to_string())?);
-    }
-    let content = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败：{e}"))?;
-    let mut saved: ModelConfig = serde_json::from_str(&content).unwrap_or_else(|_| ModelConfig::default());
-
-    // 迁移：用默认 provider 列表升级 base_url/name，合并 models（保留用户额外添加的）
-    let defaults = ModelConfig::default();
-    for default_pv in &defaults.providers {
-        if let Some(saved_pv) = saved.providers.iter_mut().find(|p| p.id == default_pv.id) {
-            // base_url / name 用默认值覆盖（这些随版本更新）
-            saved_pv.base_url = default_pv.base_url.clone();
-            saved_pv.name = default_pv.name.clone();
-            // models：合并而非覆盖。默认列表里的模型补上（用户删了的也补回），
-            // 用户额外添加的模型（如 DeepSeek-V3.2）保留。
-            for dm in &default_pv.models {
-                if !saved_pv.models.iter().any(|m| m == dm) {
-                    saved_pv.models.push(dm.clone());
-                }
-            }
-            // default_model：如果用户选的旧模型不在新列表里，换成新默认
-            if let Some(ref dm) = saved_pv.default_model {
-                if !saved_pv.models.iter().any(|m| m == dm) {
-                    saved_pv.default_model = default_pv.default_model.clone();
-                }
-            } else {
-                saved_pv.default_model = default_pv.default_model.clone();
-            }
-            // api_key / enabled 保留用户设置，不动
-        } else {
-            // 默认里有但保存的没有 → 新 provider，补上
-            saved.providers.push(default_pv.clone());
+        let default = default_models_json();
+        // 写入默认模板，方便用户直接编辑
+        let agent_dir = path.parent().ok_or("无效的路径")?;
+        if !agent_dir.exists() {
+            std::fs::create_dir_all(agent_dir).map_err(|e| format!("创建目录失败：{e}"))?;
         }
+        let content = serde_json::to_string_pretty(&default).map_err(|e| e.to_string())?;
+        let _ = std::fs::write(&path, content);
+        return Ok(default);
     }
-
-    Ok(serde_json::to_value(&saved).map_err(|e| e.to_string())?)
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("读取 models.json 失败：{e}"))?;
+    let val: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("解析 models.json 失败：{e}"))?;
+    Ok(val)
 }
 
-/// 保存模型配置
+/// 保存 Pi 的 models.json
 #[tauri::command]
-async fn save_model_config(config: serde_json::Value) -> Result<(), String> {
-    let path = get_model_config_path()?;
-    let agent_dir = path.parent().ok_or("无效的配置路径")?;
+async fn save_models_config(config: serde_json::Value) -> Result<(), String> {
+    let path = get_models_json_path()?;
+    let agent_dir = path.parent().ok_or("无效的路径")?;
     if !agent_dir.exists() {
         std::fs::create_dir_all(agent_dir).map_err(|e| format!("创建目录失败：{e}"))?;
     }
     let content = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
-    std::fs::write(&path, content).map_err(|e| format!("写入配置失败：{e}"))?;
+    std::fs::write(&path, content).map_err(|e| format!("写入 models.json 失败：{e}"))?;
     Ok(())
 }
 
-/// 应用模型配置到环境变量（API Key 注入到当前进程环境，供 Pi 读取）
+/// 应用 models.json 中的 API Key 到环境变量
+///
+/// 扫描 models.json 中所有 provider 的 apiKey 字段，若值为 ${ENV_VAR} 格式，
+/// 从环境变量读取实际值（不在此设置，由前端保存时写入对应的 .env 或由用户系统配置）。
+/// 若值为明文（不以 $ 开头），直接设为环境变量。
+///
+/// 注意：Pi 子进程在 spawn 时继承当前进程环境变量，所以修改后需 restart_pi 才生效。
 #[tauri::command]
-async fn apply_model_config() -> Result<String, String> {
-    let path = get_model_config_path()?;
-    if !path.exists() {
-        return Ok("无配置可应用".into());
-    }
-    let content = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败：{e}"))?;
-    let config: ModelConfig = serde_json::from_str(&content).unwrap_or_else(|_| ModelConfig::default());
-
-    // 先写入 models.json，让 Pi 通过它认识自定义 provider 和模型。
-    // 这比注入 OPENAI_API_KEY+OPENAI_BASE_URL 更可靠——Pi 的 OpenAI provider
-    // 有内部模型注册表，不认识硅基流动的模型名，set_model 会返回 "model not found"。
-    if let Err(e) = write_models_json(&config) {
-        eprintln!("[pi] 写入 models.json 失败: {}", e);
-    }
-
-    let mut applied = Vec::new();
-    for provider in &config.providers {
-        if !provider.enabled || provider.api_key.is_empty() {
-            continue;
-        }
-        let (_, _, env_name) = match provider_config(provider) {
-            Some(v) => v,
-            None => continue,
-        };
-        std::env::set_var(env_name, &provider.api_key);
-        applied.push(provider.name.clone());
-    }
-
-    if applied.is_empty() {
-        Ok("没有启用的提供商".into())
-    } else {
-        Ok(format!("已应用：{}", applied.join("、")))
-    }
+async fn apply_models_config() -> Result<String, String> {
+    apply_models_config_inner()
 }
 
-/// 同步应用模型配置到环境变量（供 setup 同步调用）
-fn apply_model_config_sync() -> Result<String, String> {
-    let path = get_model_config_path()?;
-    if !path.exists() {
-        return Ok("无配置可应用".into());
-    }
-    let content = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败：{e}"))?;
-    let config: ModelConfig = serde_json::from_str(&content).unwrap_or_else(|_| ModelConfig::default());
+/// 同步版本（供 setup 调用）
+fn apply_models_config_sync() -> Result<String, String> {
+    apply_models_config_inner()
+}
 
-    if let Err(e) = write_models_json(&config) {
-        eprintln!("[pi] 写入 models.json 失败: {}", e);
+fn apply_models_config_inner() -> Result<String, String> {
+    let path = get_models_json_path()?;
+    if !path.exists() {
+        return Ok("无 models.json 可应用".into());
     }
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("读取 models.json 失败：{e}"))?;
+    let config: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("解析 models.json 失败：{e}"))?;
 
     let mut applied = Vec::new();
-    for provider in &config.providers {
-        if !provider.enabled || provider.api_key.is_empty() {
-            continue;
+    if let Some(providers) = config.get("providers").and_then(|v| v.as_object()) {
+        for (id, provider) in providers {
+            // provider 必须有 models 且非空才视为"已配置"
+            let models = provider.get("models").and_then(|m| m.as_array());
+            if models.map_or(true, |m| m.is_empty()) {
+                continue;
+            }
+            let api_key = provider.get("apiKey").and_then(|v| v.as_str()).unwrap_or("");
+            if api_key.is_empty() {
+                continue;
+            }
+            // apiKey 格式：$ENV_VAR 或明文 key
+            let (env_name, actual_key) = if let Some(stripped) = api_key.strip_prefix('$') {
+                // ${ENV_VAR} 格式：从环境变量读实际值
+                let var_name = stripped.trim_start_matches('{').trim_end_matches('}');
+                match std::env::var(var_name) {
+                    Ok(val) if !val.is_empty() => (var_name.to_string(), val),
+                    _ => continue, // 环境变量未设置，跳过
+                }
+            } else {
+                // 明文 key：用 provider id 大写作为环境变量名
+                (id.to_uppercase(), api_key.to_string())
+            };
+            std::env::set_var(&env_name, &actual_key);
+            applied.push(id.clone());
         }
-        let (_, _, env_name) = match provider_config(provider) {
-            Some(v) => v,
-            None => continue,
-        };
-        std::env::set_var(env_name, &provider.api_key);
-        applied.push(provider.name.clone());
     }
 
     if applied.is_empty() {
-        Ok("没有启用的提供商".into())
+        Ok("没有已配置的提供商".into())
     } else {
         Ok(format!("已应用：{}", applied.join("、")))
     }
@@ -2037,12 +1900,12 @@ fn main() {
             sidecar_url, sidecar_status, stop_sidecar,
             write_binary_file, open_in_explorer, open_update_folder,
             list_extensions, install_extension, uninstall_extension,
-            get_model_config, save_model_config, apply_model_config, test_model_connection,
+            get_models_config, save_models_config, apply_models_config, test_model_connection,
             list_dir, open_file, get_agent_paths, path_exists
         ])
         .setup(|app| {
             // 启动前先应用模型配置（把 API Key 注入环境变量）
-            let _ = apply_model_config_sync();
+            let _ = apply_models_config_sync();
             // 启动 Python 工具 sidecar（不阻塞，后台轮询健康后 emit sidecar-status）
             spawn_sidecar(app.handle());
             #[cfg(debug_assertions)]

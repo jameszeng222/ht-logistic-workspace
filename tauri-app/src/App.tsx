@@ -32,15 +32,9 @@ interface SessionInfo { path: string; name: string; mtime: number; size: number;
 interface ModelInfo { id: string; name: string; provider: string; contextWindow?: number; reasoning?: boolean; }
 interface PiState { model: ModelInfo | null; thinkingLevel: string; isStreaming: boolean; sessionFile?: string; sessionName?: string; messageCount: number; }
 interface SessionStats { contextUsage?: { percent: number; tokens: number; contextWindow: number }; cost?: number; }
-interface ModelProvider {
-  id: string;
-  name: string;
-  apiKey: string;
-  baseUrl?: string;
-  models: string[];
-  defaultModel?: string;
-  enabled: boolean;
-}
+interface JsonModel { id: string; name: string; }
+interface JsonProvider { baseUrl: string; api: string; apiKey: string; models: JsonModel[]; }
+interface ModelsConfig { providers: Record<string, JsonProvider>; }
 
 let toastId = 0;
 
@@ -149,13 +143,9 @@ export default function App() {
   });
 
   // 模型配置
-  const [modelConfig, setModelConfig] = useState<{
-    providers: ModelProvider[];
-    defaultProvider?: string;
-    defaultModel?: string;
-  } | null>(null);
-  const [modelConfigDirty, setModelConfigDirty] = useState(false);
-  const [modelConfigSaving, setModelConfigSaving] = useState(false);
+  const [modelsConfig, setModelsConfig] = useState<ModelsConfig | null>(null);
+  const [modelsConfigDirty, setModelsConfigDirty] = useState(false);
+  const [modelsConfigSaving, setModelsConfigSaving] = useState(false);
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
   // 测试连接状态：key = providerId, value = { status: 'testing'|'ok'|'fail', message, model }
   const [connTest, setConnTest] = useState<Record<string, { status: "testing" | "ok" | "fail"; message?: string; model?: string }>>({});
@@ -268,85 +258,45 @@ export default function App() {
     } catch { /* 静默 */ }
   }, []);
 
-  // 模型配置加载/保存/应用
-  const loadModelConfig = useCallback(async () => {
+  // 模型配置加载/保存/应用（直接读写 Pi 原生 ~/.pi/agent/models.json）
+  const loadModelsConfig = useCallback(async () => {
     try {
-      const data = await invoke<any>("get_model_config");
-      // 字段名转换（snake_case -> camelCase）
-      const providers: ModelProvider[] = (data?.providers || []).map((p: any) => ({
-        id: p.id,
-        name: p.name,
-        apiKey: p.api_key || p.apiKey || "",
-        baseUrl: p.base_url || p.baseUrl,
-        models: p.models || [],
-        defaultModel: p.default_model || p.defaultModel,
-        enabled: !!p.enabled,
-      }));
-      setModelConfig({
-        providers,
-        defaultProvider: data.default_provider || data.defaultProvider,
-        defaultModel: data.default_model || data.defaultModel,
-      });
-      setModelConfigDirty(false);
+      const data = await invoke<any>("get_models_config");
+      setModelsConfig(data as ModelsConfig);
+      setModelsConfigDirty(false);
     } catch (e) {
       toast(`加载模型配置失败: ${e}`, "error");
     }
   }, [toast]);
 
-  const saveModelConfig = useCallback(async () => {
-    if (!modelConfig) return;
-    setModelConfigSaving(true);
+  const saveModelsConfig = useCallback(async () => {
+    if (!modelsConfig) return;
+    setModelsConfigSaving(true);
     try {
-      // 转换为 snake_case
-      const data = {
-        providers: modelConfig.providers.map((p) => ({
-          id: p.id,
-          name: p.name,
-          api_key: p.apiKey,
-          base_url: p.baseUrl || null,
-          models: p.models,
-          default_model: p.defaultModel || null,
-          enabled: p.enabled,
-        })),
-        default_provider: modelConfig.defaultProvider || null,
-        default_model: modelConfig.defaultModel || null,
-      };
-      await invoke("save_model_config", { config: data });
-      // 应用到环境变量（注入到 Tauri 主进程 env，供下次 spawn 的 Pi 子进程继承）
-      const result = await invoke<string>("apply_model_config");
-      setModelConfigDirty(false);
+      await invoke("save_models_config", { config: modelsConfig });
+      const result = await invoke<string>("apply_models_config");
+      await invoke("restart_pi", { cwd: workdirRef.current.trim() || null, sessionPath: null });
+      await refreshModels();
+      await refreshState();
+      setModelsConfigDirty(false);
       toast(`模型配置已保存。${result}`, "success");
-      // API Key 是 Pi 子进程启动时从环境变量读取的，运行中的 Pi 不会感知 env 变化。
-      // 必须重启 Pi 子进程让它读到新注入的 key，否则 get_available_models 仍返回空，
-      // 聊天框显示"未找到可用模型"。这与保存 SYSTEM.md 后重启 Pi 是同一原因。
-      try {
-        await invoke("restart_pi", { cwd: workdirRef.current.trim() || null, sessionPath: null });
-        setReady(true);
-        // 重启后刷新模型列表和状态，让下拉框立即显示新可用模型
-        await refreshModels();
-        await refreshState();
-        toast("Pi 已重启以加载新的 API Key。", "success");
-      } catch (e) {
-        toast(`Pi 重启失败（API Key 已注入，重启 App 后生效）: ${e}`, "error");
-      }
     } catch (e) {
       toast(`保存失败: ${e}`, "error");
     } finally {
-      setModelConfigSaving(false);
+      setModelsConfigSaving(false);
     }
-  }, [modelConfig, toast, refreshModels]);
+  }, [modelsConfig, toast, refreshModels, refreshState]);
 
-  const updateProvider = useCallback((providerId: string, updates: Partial<ModelProvider>) => {
-    setModelConfig((prev) => {
+  const updateProvider = useCallback((providerId: string, updates: Partial<JsonProvider>) => {
+    setModelsConfig(prev => {
       if (!prev) return prev;
+      const existing = prev.providers[providerId] || { baseUrl: "", api: "openai-completions", apiKey: "", models: [] };
       return {
         ...prev,
-        providers: prev.providers.map((p) =>
-          p.id === providerId ? { ...p, ...updates } : p
-        ),
+        providers: { ...prev.providers, [providerId]: { ...existing, ...updates } }
       };
     });
-    setModelConfigDirty(true);
+    setModelsConfigDirty(true);
   }, []);
 
   // ====== 历史恢复：get_messages → 重建 turns ======
@@ -675,7 +625,7 @@ export default function App() {
   const refreshSessionsRef = useRef(refreshSessions); refreshSessionsRef.current = refreshSessions;
   const refreshEnvKeysRef = useRef(refreshEnvKeys); refreshEnvKeysRef.current = refreshEnvKeys;
   const loadHistoryRef = useRef(loadHistory); loadHistoryRef.current = loadHistory;
-  const loadModelConfigRef = useRef(loadModelConfig); loadModelConfigRef.current = loadModelConfig;
+  const loadModelsConfigRef = useRef(loadModelsConfig); loadModelsConfigRef.current = loadModelsConfig;
   // 读取当前 app 版本号（供设置页"关于与更新"显示）
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion("unknown"));
@@ -702,7 +652,7 @@ export default function App() {
         addLogRef.current("event", "app_init · Pi 已连接");
         refreshStateRef.current(); refreshModelsRef.current(); refreshSessionsRef.current(); refreshEnvKeysRef.current();
         loadHistoryRef.current();
-        loadModelConfigRef.current();
+        loadModelsConfigRef.current();
       } catch (e) {
         if (!cancelled) {
           toastRef.current(`启动失败: ${e}`, "error");
@@ -1233,68 +1183,37 @@ export default function App() {
     return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [filteredSessions]);
 
-  // 聊天框模型下拉框只显示已配置 API Key 且启用的 provider 的模型。
-  //
-  // 模型来源：
-  //   1. Pi 原生认识的 provider（Anthropic/OpenAI/DeepSeek/Google/OpenRouter 等）：
-  //      从 Pi 的 get_available_models 返回值里筛，provider 名大小写归一化后匹配。
-  //   2. 用户在设置页填的模型列表（所有已配置 provider）：
-  //      Pi 可能没返回某些模型（如 deepseek-v4-flash 太新、硅基流动 Pi 根本不认识），
-  //      用设置页的 models 列表补齐。
-  //   3. siliconflow/custom 通过 ~/.pi/agent/models.json 注册为 Pi 自定义 provider，
-  //      set_model 时 provider 参数用 provider id（如 "siliconflow"），和 models.json key 一致。
-  const PI_NATIVE_PROVIDERS = new Set(["anthropic", "openai", "deepseek", "google", "gemini", "openrouter", "mistral", "groq", "azure", "azure openai"]);
-  const PI_PROVIDER_DISPLAY: Record<string, string> = {
-    anthropic: "Anthropic", openai: "OpenAI", deepseek: "DeepSeek",
-    google: "Google", gemini: "Gemini", openrouter: "OpenRouter",
-    mistral: "Mistral", groq: "Groq",
-  };
+  // 聊天框模型下拉框只显示已配置 API Key 且有模型列表的 provider 的模型。
+  // models.json 就是 Pi 的配置，get_available_models 会返回 models.json 注册的模型；
+  // 这里合并 modelsConfig 中的模型列表与 Pi 原生返回值，按 provider/id 去重。
+  // provider 名用 provider id（和 models.json key 一致）。
   const visibleModels = useMemo(() => {
-    if (!modelConfig) return models;
-    const configured = modelConfig.providers.filter((p) => p.enabled && p.apiKey.trim());
+    if (!modelsConfig) return models;
+    const configured = Object.entries(modelsConfig.providers)
+      .filter(([_, p]) => p.apiKey && p.models.length > 0);
     if (configured.length === 0) return [];
 
-    // 1. Pi 原生 provider：从 Pi 返回的模型列表里筛
-    const nativeIds = new Set(
-      configured
-        .filter((p) => PI_NATIVE_PROVIDERS.has(p.id.toLowerCase()))
-        .map((p) => p.id.toLowerCase())
+    // 从 modelsConfig 合成模型列表
+    const fromConfig = configured.flatMap(([id, p]) =>
+      p.models.map(m => ({ id: m.id, name: m.name, provider: id } as ModelInfo))
     );
-    const fromPi = nativeIds.size > 0
-      ? models.filter((m) => nativeIds.has(m.provider.toLowerCase()))
-      : [];
 
-    // 2. 用户设置页填的模型列表补齐（Pi 没返回的）
-    //    provider 名：原生用 Pi 的显示名（Pascal case），
-    //    非原生（siliconflow/custom）用 provider id（和 models.json key 一致）
-    const fromConfig = configured.flatMap((p) => {
-      const isNative = PI_NATIVE_PROVIDERS.has(p.id.toLowerCase());
-      const providerName = isNative
-        ? (PI_PROVIDER_DISPLAY[p.id.toLowerCase()] || p.id)
-        : p.id;
-      return p.models.map((modelId) => ({
-        id: modelId,
-        name: modelId,
-        provider: providerName,
-      } as ModelInfo));
-    });
-
-    // 去重（Pi 返回的和设置页合成的可能有重叠，按 provider/id 去重）
+    // 也包含 Pi 原生返回的模型（可能有 models.json 之外的内置模型）
     const seen = new Set<string>();
-    const merged = [...fromPi, ...fromConfig].filter((m) => {
+    const merged = [...fromConfig, ...models].filter(m => {
       const key = `${m.provider.toLowerCase()}/${m.id}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
     return merged;
-  }, [models, modelConfig]);
+  }, [models, modelsConfig]);
 
   return (
     <div className="app">
       {/* ============ 顶栏 ============ */}
       <header className="header">
-        <button className="icon-btn" onClick={() => { refreshEnvKeys(); loadSystemPrompt(systemPromptPath); loadModelConfig(); setShowSettings(true); }} title="设置">☰</button>
+        <button className="icon-btn" onClick={() => { refreshEnvKeys(); loadSystemPrompt(systemPromptPath); loadModelsConfig(); setShowSettings(true); }} title="设置">☰</button>
         <div className="app-brand">
           <span className="app-brand-mark">HT</span>
           <span>Logistic Workspace</span>
@@ -1852,48 +1771,48 @@ export default function App() {
             <div className="settings-section">
               <div className="settings-section-title" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span>模型配置</span>
-                {modelConfigDirty && (
+                {modelsConfigDirty && (
                   <span style={{ color: "var(--warning)", fontSize: 11, fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>
                     有未保存改动
                   </span>
                 )}
               </div>
-              {!modelConfig ? (
+              {!modelsConfig ? (
                 <div style={{ padding: "var(--space-4) 0", textAlign: "center", color: "var(--fg-muted)", fontSize: 13 }}>
                   加载中…
                 </div>
               ) : (
                 <>
                   <div className="model-config-list">
-                    {modelConfig.providers.map((provider) => (
+                    {Object.entries(modelsConfig.providers).map(([providerId, provider]) => {
+                      const enabled = !!provider.apiKey && provider.models.length > 0;
+                      const displayName = providerId === "siliconflow" ? "硅基流动"
+                        : providerId === "custom" ? "自定义地址"
+                        : providerId.charAt(0).toUpperCase() + providerId.slice(1);
+                      const apiKeyIsEnv = provider.apiKey.startsWith("$");
+                      return (
                       <div
-                        key={provider.id}
-                        className={`model-provider-card ${provider.enabled ? "enabled" : ""} ${editingProvider === provider.id ? "editing" : ""}`}
+                        key={providerId}
+                        className={`model-provider-card ${enabled ? "enabled" : ""} ${editingProvider === providerId ? "editing" : ""}`}
                       >
                         <div
                           className="model-provider-head"
-                          onClick={() => setEditingProvider(editingProvider === provider.id ? null : provider.id)}
+                          onClick={() => setEditingProvider(editingProvider === providerId ? null : providerId)}
                         >
                           <div className="model-provider-left">
-                            <div className={`toggle ${provider.enabled ? "on" : ""}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                updateProvider(provider.id, { enabled: !provider.enabled });
-                              }}
-                            />
-                            <span className="model-provider-name">{provider.name}</span>
-                            {provider.apiKey && provider.enabled && (
+                            <span className="model-provider-name">{displayName}</span>
+                            {enabled && (
                               <span className="model-provider-status ok">已配置</span>
                             )}
-                            {!provider.apiKey && (
+                            {!enabled && (
                               <span className="model-provider-status missing">未配置</span>
                             )}
                           </div>
                           <span className="model-provider-chevron">
-                            {editingProvider === provider.id ? "▴" : "▾"}
+                            {editingProvider === providerId ? "▴" : "▾"}
                           </span>
                         </div>
-                        {editingProvider === provider.id && (
+                        {editingProvider === providerId && (
                           <div className="model-provider-body">
                             <div className="model-config-field">
                               <label className="model-config-label">API Key</label>
@@ -1901,95 +1820,90 @@ export default function App() {
                                 type="password"
                                 className="model-config-input"
                                 value={provider.apiKey}
-                                placeholder={`输入 ${provider.name} API Key`}
-                                onChange={(e) => updateProvider(provider.id, { apiKey: e.target.value })}
+                                placeholder={`输入 ${displayName} API Key，可填 $ENV_VAR 引用环境变量`}
+                                onChange={(e) => updateProvider(providerId, { apiKey: e.target.value })}
                               />
+                              <span style={{ fontSize: 11, color: "var(--fg-muted)" }}>可填 $ENV_VAR 引用环境变量，或直接填明文 key</span>
                             </div>
                             <div className="model-config-field">
-                              <label className="model-config-label">Base URL（可选）</label>
+                              <label className="model-config-label">Base URL</label>
                               <input
                                 type="text"
                                 className="model-config-input"
                                 value={provider.baseUrl || ""}
                                 placeholder="自定义 API 地址"
-                                onChange={(e) => updateProvider(provider.id, { baseUrl: e.target.value })}
+                                onChange={(e) => updateProvider(providerId, { baseUrl: e.target.value })}
                               />
                             </div>
                             <div className="model-config-field">
-                              <label className="model-config-label">测试连接模型</label>
-                              <select
-                                className="model-config-select"
-                                value={provider.defaultModel || ""}
-                                onChange={(e) => updateProvider(provider.id, { defaultModel: e.target.value })}
-                              >
-                                {provider.models.map((m) => (
-                                  <option key={m} value={m}>{m}</option>
-                                ))}
-                              </select>
-                            </div>
-                            <div className="model-config-field">
-                              <label className="model-config-label">可用模型（每行一个，可直接输入任意模型名）</label>
+                              <label className="model-config-label">可用模型（每行一个模型 id）</label>
                               <textarea
                                 className="model-config-textarea"
-                                value={provider.models.join("\n")}
+                                value={provider.models.map((m) => m.id).join("\n")}
                                 rows={4}
-                                placeholder={"每行输入一个模型名，可直接添加官方列表之外的模型\n例如：\ndeepseek-ai/DeepSeek-V4-Flash\nPro/deepseek-ai/DeepSeek-V3.1\nQwen/Qwen3-30B-A3B"}
-                                onChange={(e) => updateProvider(provider.id, { models: e.target.value.split("\n").filter((s) => s.trim()) })}
+                                placeholder={"每行输入一个模型 id\n例如：\ndeepseek-ai/DeepSeek-V4-Flash\nPro/deepseek-ai/DeepSeek-V3.1\nQwen/Qwen3-30B-A3B"}
+                                onChange={(e) => updateProvider(providerId, { models: e.target.value.split("\n").map((s) => s.trim()).filter((s) => s).map((id) => ({ id, name: id })) })}
                               />
                             </div>
                             <div className="model-config-field" style={{ flexDirection: "row", alignItems: "center", gap: "var(--space-2)" }}>
                               <button
                                 className="btn-secondary"
-                                disabled={connTest[provider.id]?.status === "testing" || !provider.apiKey}
+                                disabled={connTest[providerId]?.status === "testing" || !provider.apiKey || apiKeyIsEnv}
                                 onClick={async () => {
-                                  setConnTest((prev) => ({ ...prev, [provider.id]: { status: "testing" } }));
+                                  setConnTest((prev) => ({ ...prev, [providerId]: { status: "testing" } }));
                                   try {
                                     const result = await invoke<any>("test_model_connection", {
-                                      providerId: provider.id,
+                                      providerId: providerId,
                                       apiKey: provider.apiKey,
                                       baseUrl: provider.baseUrl || null,
-                                      model: provider.defaultModel || null,
+                                      model: provider.models[0]?.id || null,
                                     });
                                     if (result.success) {
-                                      setConnTest((prev) => ({ ...prev, [provider.id]: { status: "ok", message: result.message, model: result.model } }));
+                                      setConnTest((prev) => ({ ...prev, [providerId]: { status: "ok", message: result.message, model: result.model } }));
                                     } else {
                                       const hint = result.hint ? `（${result.hint}）` : "";
-                                      setConnTest((prev) => ({ ...prev, [provider.id]: { status: "fail", message: `${result.message}${hint}` } }));
+                                      setConnTest((prev) => ({ ...prev, [providerId]: { status: "fail", message: `${result.message}${hint}` } }));
                                     }
                                   } catch (e: any) {
-                                    setConnTest((prev) => ({ ...prev, [provider.id]: { status: "fail", message: String(e) } }));
+                                    setConnTest((prev) => ({ ...prev, [providerId]: { status: "fail", message: String(e) } }));
                                   }
                                 }}
                               >
-                                {connTest[provider.id]?.status === "testing" ? "测试中…" : "测试连接"}
+                                {connTest[providerId]?.status === "testing" ? "测试中…" : "测试连接"}
                               </button>
-                              {connTest[provider.id]?.status === "ok" && (
-                                <span style={{ color: "var(--success, #16a34a)", fontSize: 12 }}>
-                                  ✓ {connTest[provider.id].message}
-                                  {connTest[provider.id].model && <span style={{ color: "var(--fg-muted)" }}> (模型: {connTest[provider.id].model})</span>}
+                              {apiKeyIsEnv && (
+                                <span style={{ color: "var(--fg-muted)", fontSize: 12 }}>
+                                  API Key 引用了环境变量，无法在此测试，请保存后通过实际使用验证
                                 </span>
                               )}
-                              {connTest[provider.id]?.status === "fail" && (
+                              {connTest[providerId]?.status === "ok" && (
+                                <span style={{ color: "var(--success, #16a34a)", fontSize: 12 }}>
+                                  ✓ {connTest[providerId].message}
+                                  {connTest[providerId].model && <span style={{ color: "var(--fg-muted)" }}> (模型: {connTest[providerId].model})</span>}
+                                </span>
+                              )}
+                              {connTest[providerId]?.status === "fail" && (
                                 <span style={{ color: "var(--error, #dc2626)", fontSize: 12, wordBreak: "break-all" }}>
-                                  ✗ {connTest[provider.id].message}
+                                  ✗ {connTest[providerId].message}
                                 </span>
                               )}
                             </div>
                           </div>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                   <div className="model-config-actions">
                     <button
                       className="btn-primary"
-                      onClick={saveModelConfig}
-                      disabled={modelConfigSaving || !modelConfigDirty}
+                      onClick={saveModelsConfig}
+                      disabled={modelsConfigSaving || !modelsConfigDirty}
                     >
-                      {modelConfigSaving ? "保存中…" : "保存模型配置"}
+                      {modelsConfigSaving ? "保存中…" : "保存模型配置"}
                     </button>
                     <span className="model-config-hint">
-                      配置 API Key 后保存即注入环境变量，新会话立即生效。配置文件：~/.pi/agent/model-config.json
+                      配置文件：~/.pi/agent/models.json（Pi 原生格式）。API Key 可填 $ENV_VAR 引用环境变量，或直接填明文。
                     </span>
                   </div>
                 </>
